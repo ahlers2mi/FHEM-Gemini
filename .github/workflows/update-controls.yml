@@ -1,0 +1,28 @@
+name: Update controls_Gemini.txt
+
+on:
+  push:
+    paths:
+      - '98_Gemini.pm'
+
+jobs:
+  update-controls:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update controls_Gemini.txt
+        run: |
+          SIZE=$(wc -c < 98_Gemini.pm)
+          DATE=$(date -u +"%Y-%m-%d_%H:%M:%S")
+          echo "UPD ${DATE} ${SIZE} FHEM/98_Gemini.pm" > controls_Gemini.txt
+
+      - name: Commit updated controls_Gemini.txt
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add controls_Gemini.txt
+          git diff --cached --quiet || git commit -m "Auto-update controls_Gemini.txt"
+          git push
