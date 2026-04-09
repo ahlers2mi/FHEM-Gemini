@@ -17,6 +17,8 @@
 #   systemPrompt  - Optionaler System-Prompt
 #   timeout       - HTTP Timeout in Sekunden (Standard: 30)
 #   deviceList    - Komma-getrennte Liste der Geräte für askAboutDevices
+#   deviceRoom    - Komma-getrennte Raumliste; Geräte mit passendem room-Attribut
+#                   werden automatisch für askAboutDevices verwendet
 #   controlList   - Komma-getrennte Liste der Geräte, die Gemini steuern darf
 #
 # Set-Befehle:
@@ -37,6 +39,9 @@
 ##############################################################################
 
 # Versionshistorie:
+# 2.1.0 - 2026-04-09  Neues Attribut deviceRoom: Geräte automatisch per Raum
+#                          filtern (komma-getrennte Räume möglich); deviceList
+#                          und deviceRoom werden kombiniert, Duplikate vermieden
 # 2.0.2 - 2026-04-09  Fix: gesamtes content-Objekt der Modell-Antwort im Chat
 #                          speichern (push $content statt konstruiertes Hash)
 #                          für korrekte Multi-Turn Function Calling Konversation
@@ -74,6 +79,7 @@ sub Gemini_Initialize {
         'timeout ' .
         'disable:0,1 ' .
         'deviceList ' .
+        'deviceRoom ' .
         'controlList ' .
         $readingFnAttributes;
 
@@ -89,7 +95,7 @@ sub Gemini_Define {
     my $name = $args[0];
     $hash->{NAME}        = $name;
     $hash->{CHAT}        = [];   # Chat-Verlauf als Array-Referenz
-    $hash->{VERSION}     = '2.0.2';
+    $hash->{VERSION}     = '2.1.0';
 
     readingsSingleUpdate($hash, 'state',             'initialized', 1);
     readingsSingleUpdate($hash, 'response',          '-',           0);
@@ -384,20 +390,49 @@ sub Gemini_GetMimeType {
 # FHEM Device-Kontext für Gemini aufbauen
 ##############################################################################
 sub Gemini_BuildDeviceContext {
-    my ($hash) = @_; 
-    my $name     = $hash->{NAME};
-    my $devList  = AttrVal($name, 'deviceList', '');
+    my ($hash) = @_;
+    my $name = $hash->{NAME};
 
-    $devList = join(' ', $main::defs) if $devList eq "*";
-    return '' unless $devList;
+    my %seen;
+    my @devices;
 
-    my @devices  = split(/\s*,\s*/, $devList);
-    my $context  = "Aktueller Status der Smart-Home Geräte:\n";
+    # Geräte aus deviceRoom sammeln
+    my $deviceRoom = AttrVal($name, 'deviceRoom', '');
+    if ($deviceRoom) {
+        my @rooms = split(/\s*,\s*/, $deviceRoom);
+        for my $devName (sort keys %main::defs) {
+            my $devRoomAttr = AttrVal($devName, 'room', '');
+            for my $room (@rooms) {
+                if (grep { $_ eq $room } split(/\s*,\s*/, $devRoomAttr)) {
+                    unless ($seen{$devName}) {
+                        push @devices, $devName;
+                        $seen{$devName} = 1;
+                    }
+                    last;
+                }
+            }
+        }
+    }
+
+    # Geräte aus deviceList hinzufügen (Duplikate vermeiden)
+    my $devList = AttrVal($name, 'deviceList', '');
+    $devList = join(',', sort keys %main::defs) if $devList eq '*';
+    if ($devList) {
+        for my $devName (split(/\s*,\s*/, $devList)) {
+            unless ($seen{$devName}) {
+                push @devices, $devName;
+                $seen{$devName} = 1;
+            }
+        }
+    }
+
+    return '' unless @devices;
+
+    my $context = "Aktueller Status der Smart-Home Geräte:\n";
 
     for my $devName (@devices) {
         next unless exists $main::defs{$devName};
-        my $dev = $main::defs{$devName};
-
+        my $dev   = $main::defs{$devName};
         my $alias = AttrVal($devName, 'alias', $devName);
 
         Log3 $name, 3, "Gemini ($name): Alias " . $alias;
@@ -412,7 +447,7 @@ sub Gemini_BuildDeviceContext {
             $context .= "  Readings:\n";
             for my $reading (sort keys %{$dev->{READINGS}}) {
                 next if $reading eq 'state';
-                my $val  = $dev->{READINGS}{$reading}{VAL} // '';
+                my $val  = $dev->{READINGS}{$reading}{VAL}  // '';
                 my $time = $dev->{READINGS}{$reading}{TIME} // '';
                 $context .= "    $reading: $val (Stand: $time)\n";
             }
@@ -797,6 +832,10 @@ sub Gemini_SendFunctionResult {
     <li><b>timeout</b> - HTTP Timeout in Sekunden (Standard: 30)</li>
     <li><b>disable</b> - Modul deaktivieren</li>
     <li><b>deviceList</b> - Komma-getrennte Geraete liste fuer askAboutDevices</li>
+    <li><b>deviceRoom</b> - Komma-getrennte Raumliste; alle Geraete mit passendem
+      FHEM-room-Attribut werden automatisch fuer askAboutDevices verwendet.
+      Beispiel: <code>attr GeminiAI deviceRoom Wohnzimmer,Kueche</code>.
+      Kann zusammen mit <b>deviceList</b> verwendet werden.</li>
     <li><b>controlList</b> - Komma-getrennte Liste der Geraete, die Gemini per
       Function Calling steuern darf (Pflicht fuer den control-Befehl).
       Beispiel: <code>attr GeminiAI controlList Lampe1,Heizung,Rolladen1</code></li>
