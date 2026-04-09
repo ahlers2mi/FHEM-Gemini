@@ -80,10 +80,10 @@ sub Gemini_Initialize {
         'maxHistory:5,10,20,50,100 ' .
         'timeout ' .
         'disable:0,1 ' .
-        'deviceList:textField-long '
-        'controlList:textField-long '
-        'deviceRoom:textField-long '
-        'systemPrompt:textField-long '
+        'deviceList:textField-long ' .
+        'controlList:textField-long ' .
+        'deviceRoom:textField-long ' .
+        'systemPrompt:textField-long ' .
         $readingFnAttributes;
 
     return undef;
