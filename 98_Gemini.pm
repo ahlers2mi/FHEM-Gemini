@@ -100,12 +100,12 @@ sub Gemini_Define {
 }
 
 sub Gemini_Undefine {
-    my ($hash, $name) = @++;
+    my ($hash, $name) = @_;
     return undef;
 }
 
 sub Gemini_Attr {
-    my ($cmd, $name, $attr, $value) = @++;
+    my ($cmd, $name, $attr, $value) = @_;
     # Validierung
     if ($attr eq 'timeout') {
         return "timeout must be a positive number" unless ($value =~ /^\d+$/ && $value > 0);
@@ -114,7 +114,7 @@ sub Gemini_Attr {
 }
 
 sub Gemini_Set {
-    my ($hash, $name, $cmd, @args) = @++;
+    my ($hash, $name, $cmd, @args) = @_;
 
     return "\"set $name\" needs at least one argument" unless defined($cmd);
 
@@ -133,7 +133,7 @@ sub Gemini_Set {
         return undef;
 
     } elsif ($cmd eq 'askAboutDevices') {
-        my $question     = @args ? join(' ', @args) : 'Gib mir eine Zusammenfassung aller Geräte und ihres aktuellen Status.';
+        my $question      = @args ? join(' ', @args) : 'Gib mir eine Zusammenfassung aller Geräte und ihres aktuellen Status.';
         my $deviceContext = Gemini_BuildDeviceContext($hash);
         Gemini_SendRequest($hash, $question, undef, $deviceContext);
         return undef;
@@ -159,7 +159,7 @@ sub Gemini_Set {
 }
 
 sub Gemini_Get {
-    my ($hash, $name, $cmd, @args) = @++;
+    my ($hash, $name, $cmd, @args) = @_; 
 
     if ($cmd eq 'chatHistory') {
         my $history = $hash->{CHAT};
@@ -185,7 +185,7 @@ sub Gemini_Get {
 # Hauptfunktion: Anfrage an Gemini API senden
 ##############################################################################
 sub Gemini_SendRequest {
-    my ($hash, $question, $imagePath, $deviceContext) = @++;
+    my ($hash, $question, $imagePath, $deviceContext) = @_; 
     my $name = $hash->{NAME};
 
     if (AttrVal($name, 'disable', 0)) {
@@ -233,7 +233,7 @@ sub Gemini_SendRequest {
     push @parts, { text => $question };
 
     push @{$hash->{CHAT}}, {
-        role  => 'user',
+        role  => 'user', 
         parts => \@parts
     };
 
@@ -241,7 +241,7 @@ sub Gemini_SendRequest {
         shift @{$hash->{CHAT}};
     }
 
-    # Request-Body aufbauen
+    # Request-Body aufbauen 
     my %requestBody = (
         contents => $hash->{CHAT}
     );
@@ -269,7 +269,7 @@ sub Gemini_SendRequest {
 
     Log3 $name, 4, "Gemini ($name): Anfrage " . $jsonBody;
 
-    my $url = "https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}";
+    my $url = "https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}";
 
     readingsSingleUpdate($hash, 'state', 'requesting...', 1);
 
@@ -290,7 +290,7 @@ sub Gemini_SendRequest {
 # Callback: Antwort von Gemini verarbeiten
 ##############################################################################
 sub Gemini_HandleResponse {
-    my ($param, $err, $data) = @++;
+    my ($param, $err, $data) = @_; 
     my $hash = $param->{hash};
     my $name = $hash->{NAME};
 
@@ -364,7 +364,7 @@ sub Gemini_HandleResponse {
 # Hilfsfunktion: MIME-Typ anhand Dateiendung bestimmen
 ##############################################################################
 sub Gemini_GetMimeType {
-    my ($filePath) = @++;
+    my ($filePath) = @_; 
 
     my $ext = '';
     if ($filePath =~ /\.([^.]+)$/) {
@@ -389,7 +389,7 @@ sub Gemini_GetMimeType {
 # FHEM Device-Kontext für Gemini aufbauen
 ##############################################################################
 sub Gemini_BuildDeviceContext {
-    my ($hash) = @++;
+    my ($hash) = @_;
     my $name     = $hash->{NAME};
     my $devList  = AttrVal($name, 'deviceList', '');
 
@@ -433,7 +433,7 @@ sub Gemini_BuildDeviceContext {
             $context .= "  $attrName: $attrVal\n" if $attrVal;
         }
 
-        Log3 $name, 3, "Gemini ($name): " . $alias . ": " . $context ;
+        Log3 $name, 3, "Gemini ($name): " . $alias . ": " . $context;
 
     }
 
@@ -477,7 +477,7 @@ sub Gemini_GetControlTools {
 # Hilfsfunktion: Control-Session-Chat zurücksetzen (Fehlerbehandlung)
 ##############################################################################
 sub Gemini_RollbackControlSession {
-    my ($hash) = @++;
+    my ($hash) = @_;
     my $startIdx = $hash->{CONTROL_START_IDX} // 0;
     splice(@{$hash->{CHAT}}, $startIdx);
     delete $hash->{CONTROL_START_IDX};
@@ -487,7 +487,7 @@ sub Gemini_RollbackControlSession {
 # Control-Funktion: Gerät steuern via Function Calling
 ##############################################################################
 sub Gemini_SendControl {
-    my ($hash, $instruction) = @++;
+    my ($hash, $instruction) = @_;
     my $name = $hash->{NAME};
 
     if (AttrVal($name, 'disable', 0)) {
@@ -513,7 +513,7 @@ sub Gemini_SendControl {
     # Neue User-Nachricht in den Chat aufnehmen
     push @{$hash->{CHAT}}, {
         role  => 'user',
-        parts => [{ text => $instruction }]
+        parts => [{ text => $instruction }] 
     };
 
     while (scalar(@{$hash->{CHAT}}) > $maxHistory) {
@@ -543,7 +543,7 @@ sub Gemini_SendControl {
 
     Log3 $name, 4, "Gemini ($name): Control-Anfrage " . $jsonBody;
 
-    my $url = "https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}";
+    my $url = "https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}";
 
     readingsSingleUpdate($hash, 'state', 'requesting...', 1);
 
@@ -564,7 +564,7 @@ sub Gemini_SendControl {
 # Callback: Antwort auf Control-Anfrage / Function-Result verarbeiten
 ##############################################################################
 sub Gemini_HandleControlResponse {
-    my ($param, $err, $data) = @++;
+    my ($param, $err, $data) = @_; 
     my $hash = $param->{hash};
     my $name = $hash->{NAME};
 
@@ -589,7 +589,7 @@ sub Gemini_HandleControlResponse {
     }
 
     if (exists $result->{error}) {
-        my $errMsg  = $result->{error}{message} // 'Unbekannte API Fehler';
+        my $errMsg  = $result->{error}{message} // 'Unbekannter API Fehler';
         my $errCode = $result->{error}{code}    // 'N/A';
         readingsSingleUpdate($hash, 'lastError', "API Fehler $errCode: $errMsg", 1);
         readingsSingleUpdate($hash, 'state', 'error', 1);
@@ -617,11 +617,11 @@ sub Gemini_HandleControlResponse {
 
             if ($fcName eq 'set_device') {
                 my $device  = $args->{device}  // '';
-                my $command = $args->{command} // '';
+                my $command = $args->{command} // ''; 
 
                 # Basis-Validierung: keine Shell-Sonderzeichen im Befehl
-                if ($command =~ /[;|`$\(\)<>
-\r]/) {
+                if ($command =~ /[;|`\$\(\)<>
+]/) {
                     my $errMsg = "Fehler: Ungültiger Befehl '$command' (unerlaubte Zeichen)";
                     Log3 $name, 2, "Gemini ($name): $errMsg";
                     Gemini_SendFunctionResult($hash, $fcName, $errMsg);
@@ -649,7 +649,7 @@ sub Gemini_HandleControlResponse {
                     Log3 $name, 3, "Gemini ($name): set $device $command -> $setResult";
                     Gemini_SendFunctionResult($hash, $fcName, "OK: $device $command ausgefuehrt");
                 } else {
-                    my $errMsg = "Fehler: Geraet '$device' nicht in controlList oder nicht vorhanden";
+                    my $errMsg = "Fehler: Gerät '$device' nicht in controlList oder nicht vorhanden";
 
                     my $cmdForReading = "$device $command";
                     utf8::encode($cmdForReading) if utf8::is_utf8($cmdForReading);
@@ -672,7 +672,7 @@ sub Gemini_HandleControlResponse {
 
                 if (exists $main::defs{$device}) {
                     my $dev = $main::defs{$device};
-                    $stateResult  = "Geraet: $device\n";
+                    $stateResult  = "Gerät: $device\n";
                     $stateResult .= "Typ: " . ($dev->{TYPE} // 'unbekannt') . "\n";
                     $stateResult .= "Status: " . ReadingsVal($device, 'state', 'unbekannt') . "\n";
                     if (exists $dev->{READINGS}) {
@@ -684,7 +684,7 @@ sub Gemini_HandleControlResponse {
                         }
                     }
                 } else {
-                    $stateResult = "Fehler: Geraet '$device' nicht gefunden";
+                    $stateResult = "Fehler: Gerät '$device' nicht gefunden";
                 }
 
                 Gemini_SendFunctionResult($hash, $fcName, $stateResult);
@@ -739,7 +739,7 @@ sub Gemini_HandleControlResponse {
 # Hilfsfunktion: functionResponse an Gemini zurückschicken
 ##############################################################################
 sub Gemini_SendFunctionResult {
-    my ($hash, $fcName, $resultText) = @++;
+    my ($hash, $fcName, $resultText) = @_; 
     my $name = $hash->{NAME};
 
     # functionResponse in Chat-Verlauf aufnehmen
@@ -777,9 +777,9 @@ sub Gemini_SendFunctionResult {
         return;
     }
 
-    Log3 $name, 4, "Gemini ($name): FunctionResult fuer '$fcName' gesendet";
+    Log3 $name, 4, "Gemini ($name): FunctionResult für '$fcName' gesendet";
 
-    my $url = "https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}";
+    my $url = "https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}";
 
     HttpUtils_NonblockingGet({
         url      => $url,
@@ -799,7 +799,7 @@ sub Gemini_SendFunctionResult {
 =pod
 =item device
 =item summary Google Gemini AI integration for FHEM
-=item summary_DE Google Gemini KI Anbindung fuer FHEM
+=item summary_DE Google Gemini KI Anbindung für FHEM
 
 =begin html
 
@@ -819,9 +819,9 @@ sub Gemini_SendFunctionResult {
     <li><b>systemPrompt</b> - Optionaler System-Prompt</li>
     <li><b>timeout</b> - HTTP Timeout in Sekunden (Standard: 30)</li>
     <li><b>disable</b> - Modul deaktivieren</li>
-    <li><b>deviceList</b> - Komma-getrennte Geraete liste fuer askAboutDevices</li>
-    <li><b>controlList</b> - Komma-getrennte Liste der Geraete, die Gemini per
-      Function Calling steuern darf (Pflicht fuer den control-Befehl).
+    <li><b>deviceList</b> - Komma-getrennte Geräteliste für askAboutDevices</li>
+    <li><b>controlList</b> - Komma-getrennte Liste der Geräte, die Gemini per
+      Function Calling steuern darf (Pflicht für den control-Befehl).
       Beispiel: <code>attr GeminiAI controlList Lampe1,Heizung,Rolladen1</code></li>
   </ul><br>
 
@@ -829,11 +829,11 @@ sub Gemini_SendFunctionResult {
   <ul>
     <li><b>ask</b> &lt;Frage&gt; - Textfrage stellen</li>
     <li><b>askWithImage</b> &lt;Bildpfad&gt; &lt;Frage&gt; - Bild + Frage senden</li>
-    <li><b>askAboutDevices</b> [&lt;Frage&gt;] - Geraete-Status an Gemini uebergeben und Frage stellen</li>
-    <li><b>control</b> &lt;Anweisung&gt; - Gemini steuert FHEM-Geraete eigenstaendig per
+    <li><b>askAboutDevices</b> [&lt;Frage&gt;] - Geräte-Status an Gemini übergeben und Frage stellen</li>
+    <li><b>control</b> &lt;Anweisung&gt; - Gemini steuert FHEM-Geräte eigenständig per
       Function Calling. Beispiel: <code>set GeminiAI control Mach die Wohnzimmerlampe an</code>.
-      Nur Geraete aus <b>controlList</b> duerfen gesteuert werden.</li>
-    <li><b>resetChat</b> - Chat-Verlauf loeschen</li>
+      Nur Geräte aus <b>controlList</b> dürfen gesteuert werden.</li>
+    <li><b>resetChat</b> - Chat-Verlauf löschen</li>
   </ul><br>
 
   <b>Get</b><br>
@@ -847,7 +847,7 @@ sub Gemini_SendFunctionResult {
     <li><b>state</b> - Aktueller Status</li>
     <li><b>lastError</b> - Letzter Fehler</li>
     <li><b>chatHistory</b> - Anzahl der Nachrichten im Chat-Verlauf</li>
-    <li><b>lastCommand</b> - Letzter ausgefuehrter set-Befehl (z.B. <code>Lampe1 on</code>)</li>
+    <li><b>lastCommand</b> - Letzter ausgeführter set-Befehl (z.B. <code>Lampe1 on</code>)</li>
     <li><b>lastCommandResult</b> - Ergebnis des letzten set-Befehls (<code>ok</code> oder Fehlermeldung)</li>
   </ul>
 </ul>
