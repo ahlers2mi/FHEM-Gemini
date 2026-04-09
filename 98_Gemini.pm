@@ -39,6 +39,9 @@
 ##############################################################################
 
 # Versionshistorie:
+# 2.3.0 - 2026-04-09  Gemini_BuildControlContext gibt jetzt auch die
+#                          verfuegbaren set-Befehle jedes Geraets aus, damit
+#                          Gemini passende Befehle waehlen kann
 # 2.2.1 - 2026-04-09  Fix: Regex fuer verbotene Zeichen auf eine Zeile
 #                          zusammengefasst (\n statt literal newline im Source)
 # 2.2.0 - 2026-04-09  Fix: control-Befehl übergibt Alias→Name-Mapping als
@@ -100,7 +103,7 @@ sub Gemini_Define {
     my $name = $args[0];
     $hash->{NAME}        = $name;
     $hash->{CHAT}        = [];   # Chat-Verlauf als Array-Referenz
-    $hash->{VERSION}     = '2.2.1';
+    $hash->{VERSION}     = '2.3.0';
 
     readingsSingleUpdate($hash, 'state',             'initialized', 1);
     readingsSingleUpdate($hash, 'response',          '-',           0);
@@ -482,11 +485,28 @@ sub Gemini_BuildControlContext {
     my @devices = split(/\s*,\s*/, $controlList);
     return '' unless @devices;
 
-    my $context = "Verfügbare Geräte (Alias => interner FHEM-Name):\n";
+    my $context = "Verfuegbare Geraete zum Steuern:\n";
     for my $devName (@devices) {
         next unless exists $main::defs{$devName};
         my $alias = AttrVal($devName, 'alias', $devName);
-        $context .= "  $alias => $devName\n";
+
+        # Set-Befehle ermitteln
+        my $setListRaw = '';
+        if (defined $main::defs{$devName}{'.setList'}) {
+            $setListRaw = $main::defs{$devName}{'.setList'};
+        } elsif (defined $main::defs{$devName}{'SetList'}) {
+            $setListRaw = $main::defs{$devName}{'SetList'};
+        }
+
+        # Nur Befehlsnamen extrahieren (ohne Typ-Definitionen wie :slider,0,1,100)
+        my @cmds;
+        for my $entry (split(/\s+/, $setListRaw)) {
+            $entry =~ s/:.*//;
+            push @cmds, $entry if $entry;
+        }
+
+        my $cmdsStr = @cmds ? join(', ', @cmds) : 'unbekannt';
+        $context .= "  $alias (intern: $devName) -- set-Befehle: $cmdsStr\n";
     }
 
     return $context;
@@ -879,8 +899,9 @@ sub Gemini_SendFunctionResult {
       Kann zusammen mit <b>deviceList</b> verwendet werden.</li>
     <li><b>controlList</b> - Komma-getrennte Liste der Geraete, die Gemini per
       Function Calling steuern darf (Pflicht fuer den control-Befehl).
-      Die Alias-Namen der Geraete werden automatisch an Gemini uebermittelt,
-      sodass Sprachbefehle mit Alias-Namen funktionieren.
+      Alias-Namen und verfuegbare set-Befehle der Geraete werden automatisch
+      an Gemini uebermittelt, sodass Sprachbefehle mit Alias-Namen und
+      passende Befehle automatisch erkannt werden.
       Beispiel: <code>attr GeminiAI controlList Lampe1,Heizung,Rolladen1</code></li>
   </ul><br>
 
