@@ -18,8 +18,7 @@ jobs:
         run: |
           SIZE=$(wc -c < FHEM/98_Gemini.pm)
           DATE=$(date -u +"%Y-%m-%d_%H:%M:%S")
-          MD5=$(md5sum FHEM/98_Gemini.pm | awk '{print $1}')
-          echo "UPD ${DATE} ${SIZE} ${MD5} FHEM/98_Gemini.pm" > controls_Gemini.txt
+          echo "UPD ${DATE} ${SIZE} FHEM/98_Gemini.pm" > controls_Gemini.txt
 
       - name: Commit updated controls_Gemini.txt
         run: |
