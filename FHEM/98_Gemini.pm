@@ -283,6 +283,7 @@ sub Gemini_SendRequest {
             shift @{$hash->{CHAT}};
         } elsif (exists $first->{parts}[0]{functionResponse}) {
             shift @{$hash->{CHAT}};
+            # Also remove any following model turns that are now stranded without the functionResponse
             shift @{$hash->{CHAT}} while @{$hash->{CHAT}} && $hash->{CHAT}[0]{role} ne 'user';
         } else {
             last;
@@ -638,6 +639,7 @@ sub Gemini_SendControl {
         } elsif (exists $first->{parts}[0]{functionResponse}) {
             shift @{$hash->{CHAT}};
             $hash->{CONTROL_START_IDX}-- if $hash->{CONTROL_START_IDX} > 0;
+            # Also remove any following model turns that are now stranded without the functionResponse
             while (@{$hash->{CHAT}} && $hash->{CHAT}[0]{role} ne 'user') {
                 shift @{$hash->{CHAT}};
                 $hash->{CONTROL_START_IDX}-- if $hash->{CONTROL_START_IDX} > 0;
