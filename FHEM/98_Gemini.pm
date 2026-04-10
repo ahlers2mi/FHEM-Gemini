@@ -40,6 +40,10 @@
 ##############################################################################
 
 # Versionshistorie:
+# 2.8.0 - 2026-04-10  Fix: History-Trimming entfernt nun auch verwaiste
+#                          functionResponse-User-Turns am Anfang des Verlaufs,
+#                          die ohne vorausgehenden functionCall-Turn ungueltig
+#                          sind und API-Fehler 400 verursachen (Issue #8)
 # 2.7.0 - 2026-04-10  Fix: set-Befehle werden nun mit Typ-Informationen
 #                          (z.B. :slider,0,1,100) an Gemini uebermittelt;
 #                          interne FHEM-Eintraege (attrTemplate, associate)
@@ -50,6 +54,7 @@
 # 2.5.0 - 2026-04-10  Fix: Chat-Verlauf-Trimming stellt sicher, dass der Verlauf
 #                          immer mit einem user-Turn beginnt, um API-Fehler 400
 #                          ("function call turn must come after user turn") zu vermeiden
+#                          (verwaiste functionResponse-Turns werden in 2.8.0 behoben)
 # 2.4.0 - 2026-04-09  Neues Attribut disableHistory: Chat-Verlauf deaktivieren,
 #                          jede Anfrage wird als eigenstaendiges Gespraech behandelt
 # 2.3.0 - 2026-04-09  Gemini_BuildControlContext gibt jetzt auch die
@@ -269,9 +274,19 @@ sub Gemini_SendRequest {
     while (scalar(@{$hash->{CHAT}}) > $maxHistory) {
         shift @{$hash->{CHAT}};
     }
-    # Ensure history always starts with a user turn (API requirement)
-    while (@{$hash->{CHAT}} && $hash->{CHAT}[0]{role} ne 'user') {
-        shift @{$hash->{CHAT}};
+    # Ensure history starts with a valid user text turn (API requirement):
+    # remove leading model turns and orphaned user functionResponse turns
+    # (a functionResponse without a preceding functionCall is invalid)
+    while (@{$hash->{CHAT}}) {
+        my $first = $hash->{CHAT}[0];
+        if ($first->{role} ne 'user') {
+            shift @{$hash->{CHAT}};
+        } elsif (exists $first->{parts}[0]{functionResponse}) {
+            shift @{$hash->{CHAT}};
+            shift @{$hash->{CHAT}} while @{$hash->{CHAT}} && $hash->{CHAT}[0]{role} ne 'user';
+        } else {
+            last;
+        }
     }
 
     my $disableHistory = AttrVal($name, 'disableHistory', 0);
@@ -612,10 +627,24 @@ sub Gemini_SendControl {
         shift @{$hash->{CHAT}};
         $hash->{CONTROL_START_IDX}-- if $hash->{CONTROL_START_IDX} > 0;
     }
-    # Ensure history always starts with a user turn (API requirement)
-    while (@{$hash->{CHAT}} && $hash->{CHAT}[0]{role} ne 'user') {
-        shift @{$hash->{CHAT}};
-        $hash->{CONTROL_START_IDX}-- if $hash->{CONTROL_START_IDX} > 0;
+    # Ensure history starts with a valid user text turn (API requirement):
+    # remove leading model turns and orphaned user functionResponse turns
+    # (a functionResponse without a preceding functionCall is invalid)
+    while (@{$hash->{CHAT}}) {
+        my $first = $hash->{CHAT}[0];
+        if ($first->{role} ne 'user') {
+            shift @{$hash->{CHAT}};
+            $hash->{CONTROL_START_IDX}-- if $hash->{CONTROL_START_IDX} > 0;
+        } elsif (exists $first->{parts}[0]{functionResponse}) {
+            shift @{$hash->{CHAT}};
+            $hash->{CONTROL_START_IDX}-- if $hash->{CONTROL_START_IDX} > 0;
+            while (@{$hash->{CHAT}} && $hash->{CHAT}[0]{role} ne 'user') {
+                shift @{$hash->{CHAT}};
+                $hash->{CONTROL_START_IDX}-- if $hash->{CONTROL_START_IDX} > 0;
+            }
+        } else {
+            last;
+        }
     }
 
     my $disableHistory = AttrVal($name, 'disableHistory', 0);
