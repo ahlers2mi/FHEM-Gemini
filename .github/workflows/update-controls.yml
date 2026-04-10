@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - '98_Gemini.pm'
+  workflow_dispatch:
 
 jobs:
   update-controls:
@@ -17,7 +18,8 @@ jobs:
         run: |
           SIZE=$(wc -c < 98_Gemini.pm)
           DATE=$(date -u +"%Y-%m-%d_%H:%M:%S")
-          echo "UPD ${DATE} ${SIZE} FHEM/98_Gemini.pm" > controls_Gemini.txt
+          MD5=$(md5sum 98_Gemini.pm | awk '{print $1}')
+          echo "UPD ${DATE} ${SIZE} ${MD5} FHEM/98_Gemini.pm" > controls_Gemini.txt
 
       - name: Commit updated controls_Gemini.txt
         run: |
