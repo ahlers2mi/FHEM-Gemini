@@ -69,6 +69,8 @@ set GeminiAI ask Was ist das Wetter morgen in Berlin?
 set GeminiAI askWithImage /opt/fhem/www/snapshot.jpg Was ist auf diesem Bild zu sehen?
 ```
 
+Unterstützte Bildformate: `jpg`/`jpeg`, `png`, `gif`, `webp`, `bmp`, `heic`, `heif`.
+
 ### Geräte-Status abfragen
 
 ```
@@ -83,6 +85,13 @@ attr GeminiAI deviceRoom Wohnzimmer,Küche
 set GeminiAI askAboutDevices Gib mir eine Zusammenfassung aller Geräte.
 ```
 
+Mit dem Wildcard `*` werden **alle** in FHEM definierten Geräte einbezogen:
+
+```
+attr GeminiAI deviceList *
+set GeminiAI askAboutDevices Welche Geräte sind gerade aktiv?
+```
+
 ### Geräte per Sprachbefehl steuern (Function Calling)
 
 ```
@@ -93,6 +102,8 @@ set GeminiAI control Fahre alle Rolläden runter
 ```
 
 Gemini löst Alias-Namen automatisch auf interne FHEM-Namen auf und wählt passende `set`-Befehle selbstständig aus. Nur Geräte aus `controlList` dürfen gesteuert werden.
+
+Gemini kann im Rahmen eines `control`-Befehls auch den aktuellen Status eines Geräts selbstständig abfragen (z. B. um zu prüfen, ob eine Lampe bereits an ist), bevor es einen Steuerbefehl absetzt.
 
 ### Chat zurücksetzen
 
@@ -116,8 +127,8 @@ get GeminiAI chatHistory
 | `systemPrompt` | Optionaler System-Prompt | – |
 | `timeout` | HTTP Timeout in Sekunden | `30` |
 | `disable` | Modul deaktivieren (0/1) | `0` |
-| `disableHistory` | Chat-Verlauf deaktivieren (0/1); jede Anfrage wird als eigenständiges Gespräch behandelt | `0` |
-| `deviceList` | Komma-getrennte Geräteliste für `askAboutDevices` | – |
+| `disableHistory` | Chat-Verlauf deaktivieren (0/1); jede Anfrage wird ohne vorherigen Verlauf an die API gesendet. Der interne Verlauf bleibt erhalten (für `resetChat`), wird aber nicht übertragen. | `0` |
+| `deviceList` | Komma-getrennte Geräteliste für `askAboutDevices`; `*` bezieht alle FHEM-Geräte ein | – |
 | `deviceRoom` | Komma-getrennte Raumliste; alle Geräte mit passendem `room`-Attribut werden für `askAboutDevices` verwendet | – |
 | `controlList` | Komma-getrennte Liste der Geräte, die Gemini steuern darf (Pflicht für `control`) | – |
 
@@ -136,8 +147,12 @@ get GeminiAI chatHistory
 
 | Version | Datum | Änderung |
 |---|---|---|
+| 2.8.0 | 2026-04-10 | Fix: History-Trimming entfernt verwaiste `functionResponse`-User-Turns am Anfang des Verlaufs (API-Fehler 400, Issue #8) |
+| 2.7.0 | 2026-04-10 | Fix: `set`-Befehle werden mit Typ-Informationen (z.B. `:slider,0,1,100`) an Gemini übermittelt; interne FHEM-Einträge (`attrTemplate`, `associate`) per Blacklist gefiltert |
+| 2.6.0 | 2026-04-10 | Fix: `getAllSets()` statt direktem Hash-Zugriff für `set`-Befehle, damit dynamisch berechnete `set`-Listen korrekt übermittelt werden |
+| 2.5.0 | 2026-04-10 | Fix: Chat-Verlauf-Trimming stellt sicher, dass der Verlauf immer mit einem `user`-Turn beginnt (API-Fehler 400 vermeiden) |
 | 2.4.0 | 2026-04-09 | Neues Attribut `disableHistory`: Chat-Verlauf optional deaktivieren |
-| 2.3.0 | 2026-04-09 | `Gemini_BuildControlContext` gibt jetzt auch verfügbare set-Befehle aus |
+| 2.3.0 | 2026-04-09 | `Gemini_BuildControlContext` gibt jetzt auch verfügbare `set`-Befehle aus |
 | 2.2.1 | 2026-04-09 | Fix: Regex für verbotene Zeichen korrigiert |
 | 2.2.0 | 2026-04-09 | Fix: Alias→Name-Mapping wird als `system_instruction` übergeben |
 | 2.1.0 | 2026-04-09 | Neues Attribut `deviceRoom` |
