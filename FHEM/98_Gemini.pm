@@ -193,7 +193,7 @@ sub Gemini_Get {
                 $text .= $part->{text} if exists $part->{text};
                 $text .= '[Bild]'      if exists $part->{inline_data};
             }
-            $output .= sprintf("[%%02d] %%s: %%s\n", $i+1, $role, $text);
+            $output .= sprintf("[%02d] %s: %s\n", $i+1, $role, $text);
         }
         return $output;
     }
