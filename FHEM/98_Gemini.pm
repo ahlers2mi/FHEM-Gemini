@@ -40,6 +40,10 @@
 ##############################################################################
 
 # Versionshistorie:
+# 2.7.0 - 2026-04-10  Fix: set-Befehle werden nun mit Typ-Informationen
+#                          (z.B. :slider,0,1,100) an Gemini uebermittelt;
+#                          interne FHEM-Eintraege (attrTemplate, associate)
+#                          werden per Blacklist herausgefiltert
 # 2.6.0 - 2026-04-10  Fix: getAllSets() statt direktem Hash-Zugriff fuer set-Befehle,
 #                          damit auch dynamisch berechnete set-Listen korrekt
 #                          an Gemini uebermittelt werden (statt "unbekannt")
@@ -113,7 +117,7 @@ sub Gemini_Define {
     my $name = $args[0];
     $hash->{NAME}        = $name;
     $hash->{CHAT}        = [];   # Chat-Verlauf als Array-Referenz
-    $hash->{VERSION}     = '2.6.0';
+    $hash->{VERSION}     = '2.7.0';
 
     readingsSingleUpdate($hash, 'state',             'initialized', 1);
     readingsSingleUpdate($hash, 'response',          '-',           0);
@@ -132,7 +136,7 @@ sub Gemini_Undefine {
 }
 
 sub Gemini_Attr {
-    my ($cmd, $name, $attr, $value) = @_;
+    my ($cmd, $name, $attr, $value) = @_; 
     if ($attr eq 'timeout') {
         return "timeout must be a positive number" unless ($value =~ /^\d+$/ && $value > 0);
     }
@@ -502,6 +506,10 @@ sub Gemini_BuildControlContext {
     my @devices = split(/\s*,\s*/, $controlList);
     return '' unless @devices;
 
+    # Interne FHEM-Eintraege, die nicht an Gemini uebermittelt werden sollen
+    my @blacklist = qw(attrTemplate associate);
+    my %blackset  = map { $_ => 1 } @blacklist;
+
     my $context = "Verfuegbare Geraete zum Steuern:\n";
     for my $devName (@devices) {
         next unless exists $main::defs{$devName};
@@ -510,11 +518,13 @@ sub Gemini_BuildControlContext {
         # Set-Befehle ermitteln (getAllSets liefert auch dynamisch berechnete Befehle)
         my $setListRaw = main::getAllSets($devName) // '';
 
-        # Nur Befehlsnamen extrahieren (ohne Typ-Definitionen wie :slider,0,1,100)
+        # Typ-Informationen (z.B. :slider,0,1,100) behalten, nur Blacklist-Eintraege filtern
         my @cmds;
         for my $entry (split(/\s+/, $setListRaw)) {
-            $entry =~ s/:.*//;
-            push @cmds, $entry if $entry;
+            my ($cmdName) = split(/:/, $entry, 2);  # Befehlsname zum Filtern extrahieren
+            next unless $cmdName;
+            next if $blackset{$cmdName};
+            push @cmds, $entry;                     # kompletten Eintrag inkl. :slider,... behalten
         }
 
         my $cmdsStr = @cmds ? join(', ', @cmds) : 'unbekannt';
@@ -712,7 +722,8 @@ sub Gemini_HandleControlResponse {
                 my $device  = $args->{device}  // '';
                 my $command = $args->{command} // '';
 
-                if ($command =~ /[;|`\$\(\)<>\n]/) {
+                if ($command =~ /[;|`\$\(\)<>
+]/) {
                     my $errMsg = "Fehler: Ungültiger Befehl '$command' (unerlaubte Zeichen)";
                     Log3 $name, 2, "Gemini ($name): $errMsg";
                     Gemini_SendFunctionResult($hash, $fcName, $errMsg);
