@@ -30,7 +30,9 @@
 #   resetChat                      - Chat-Verlauf löschen
 #
 # Lesewerte (Readings):
-#   response           - Letzte Antwort von Gemini
+#   response           - Letzte Antwort von Gemini (Roh-Markdown)
+#   responsePlain      - Letzte Antwort, Markdown bereinigt (reiner Text)
+#   responseHTML       - Letzte Antwort, Markdown in HTML konvertiert
 #   state              - Aktueller Status
 #   lastError          - Letzter Fehler
 #   chatHistory        - Anzahl der Nachrichten im Verlauf
@@ -40,6 +42,11 @@
 ##############################################################################
 
 # Versionshistorie:
+# 2.9.0 - 2026-04-10  Neu: Readings responsePlain (Markdown bereinigt) und
+#                          responseHTML (Markdown zu HTML) werden in
+#                          Gemini_HandleResponse und Gemini_HandleControlResponse
+#                          befuellt; neue Hilfsfunktionen Gemini_MarkdownToPlain
+#                          und Gemini_MarkdownToHTML
 # 2.8.0 - 2026-04-10  Fix: History-Trimming entfernt nun auch verwaiste
 #                          functionResponse-User-Turns am Anfang des Verlaufs,
 #                          die ohne vorausgehenden functionCall-Turn ungueltig
@@ -395,8 +402,16 @@ sub Gemini_HandleResponse {
     my $responseForReading = $responseUnicode;
     utf8::encode($responseForReading) if utf8::is_utf8($responseForReading);
 
+    my $responsePlain = Gemini_MarkdownToPlain($responseUnicode);
+    utf8::encode($responsePlain) if utf8::is_utf8($responsePlain);
+
+    my $responseHTML = Gemini_MarkdownToHTML($responseUnicode);
+    utf8::encode($responseHTML) if utf8::is_utf8($responseHTML);
+
     readingsBeginUpdate($hash);
-    readingsBulkUpdate($hash, 'response',    $responseForReading);
+    readingsBulkUpdate($hash, 'response',      $responseForReading);
+    readingsBulkUpdate($hash, 'responsePlain', $responsePlain);
+    readingsBulkUpdate($hash, 'responseHTML',  $responseHTML);
     readingsBulkUpdate($hash, 'chatHistory', scalar(@{$hash->{CHAT}}));
     readingsBulkUpdate($hash, 'state',       'ok');
     readingsBulkUpdate($hash, 'lastError',   '-');
@@ -404,6 +419,83 @@ sub Gemini_HandleResponse {
 
     Log3 $name, 4, "Gemini ($name): Antwort erhalten (" . length($responseUnicode) . " Zeichen)";
     return undef;
+}
+
+##############################################################################
+# Hilfsfunktion: Markdown in reinen Text konvertieren
+##############################################################################
+sub Gemini_MarkdownToPlain {
+    my ($text) = @_;
+    return '' unless defined $text;
+
+    # Code-Blöcke (```...```) → nur Inhalt behalten
+    $text =~ s/```[^\n]*\n(.*?)```/$1/gms;
+
+    # Fett (**text** oder __text__) → text
+    $text =~ s/\*\*(.+?)\*\*/$1/gs;
+    $text =~ s/__(.+?)__/$1/gs;
+
+    # Kursiv (*text* oder _text_) → text
+    $text =~ s/\*(.+?)\*/$1/gs;
+    $text =~ s/_(.+?)_/$1/gs;
+
+    # Inline-Code (`code`) → code
+    $text =~ s/`(.+?)`/$1/gs;
+
+    # Überschriften (# Titel) → Titel
+    $text =~ s/^#{1,6}\s+(.+)$/$1/gm;
+
+    # Listenpunkte (- oder * am Zeilenanfang) → Text
+    $text =~ s/^[\-\*]\s+(.+)$/$1/gm;
+
+    # HTML-Links (<a ...>text</a>) → text
+    $text =~ s/<a[^>]*>(.+?)<\/a>/$1/gsi;
+
+    # Trennlinien (--- oder ***) → leere Zeile
+    $text =~ s/^(?:---|\*\*\*)\s*$//gm;
+
+    return $text;
+}
+
+##############################################################################
+# Hilfsfunktion: Markdown in HTML konvertieren
+##############################################################################
+sub Gemini_MarkdownToHTML {
+    my ($text) = @_;
+    return '' unless defined $text;
+
+    # Code-Blöcke (```...```) → <pre><code>...</code></pre>
+    $text =~ s/```[^\n]*\n(.*?)```/<pre><code>$1<\/code><\/pre>/gms;
+
+    # Fett (**text** oder __text__) → <b>text</b>
+    $text =~ s/\*\*(.+?)\*\*/<b>$1<\/b>/gs;
+    $text =~ s/__(.+?)__/<b>$1<\/b>/gs;
+
+    # Kursiv (*text* oder _text_) → <i>text</i>
+    $text =~ s/\*(.+?)\*/<i>$1<\/i>/gs;
+    $text =~ s/_(.+?)_/<i>$1<\/i>/gs;
+
+    # Inline-Code (`code`) → <code>code</code>
+    $text =~ s/`(.+?)`/<code>$1<\/code>/gs;
+
+    # Überschriften (# bis ######, gekappt bei <h6>)
+    $text =~ s/^#{6}\s+(.+)$/<h6>$1<\/h6>/gm;
+    $text =~ s/^#{5}\s+(.+)$/<h6>$1<\/h6>/gm;
+    $text =~ s/^#{4}\s+(.+)$/<h6>$1<\/h6>/gm;
+    $text =~ s/^#{3}\s+(.+)$/<h5>$1<\/h5>/gm;
+    $text =~ s/^#{2}\s+(.+)$/<h4>$1<\/h4>/gm;
+    $text =~ s/^#\s+(.+)$/<h3>$1<\/h3>/gm;
+
+    # Zusammenhängende Listenblöcke (- oder * am Zeilenanfang) → <ul><li>...</li></ul>
+    $text =~ s/((?:^[\-\*]\s+.+\n?)+)/my $block = $1; $block =~ s{^[\-\*]\s+(.+)$}{<li>$1<\/li>}gm; "<ul>$block<\/ul>"/gme;
+
+    # Trennlinien (--- oder ***) → <hr>
+    $text =~ s/^(?:---|\*\*\*)\s*$/<hr>/gm;
+
+    # Zeilenumbrüche → <br> (außerhalb von Block-Elementen)
+    $text =~ s/\n(?!<(?:ul|\/ul|li|\/li|h[3-6]|\/h[3-6]|pre|\/pre|hr))/<br>\n/g;
+
+    return $text;
 }
 
 ##############################################################################
@@ -853,8 +945,16 @@ sub Gemini_HandleControlResponse {
     my $responseForReading = $responseUnicode;
     utf8::encode($responseForReading) if utf8::is_utf8($responseForReading);
 
+    my $responsePlain = Gemini_MarkdownToPlain($responseUnicode);
+    utf8::encode($responsePlain) if utf8::is_utf8($responsePlain);
+
+    my $responseHTML = Gemini_MarkdownToHTML($responseUnicode);
+    utf8::encode($responseHTML) if utf8::is_utf8($responseHTML);
+
     readingsBeginUpdate($hash);
-    readingsBulkUpdate($hash, 'response',    $responseForReading);
+    readingsBulkUpdate($hash, 'response',      $responseForReading);
+    readingsBulkUpdate($hash, 'responsePlain', $responsePlain);
+    readingsBulkUpdate($hash, 'responseHTML',  $responseHTML);
     readingsBulkUpdate($hash, 'chatHistory', scalar(@{$hash->{CHAT}}));
     readingsBulkUpdate($hash, 'state',       'ok');
     readingsBulkUpdate($hash, 'lastError',   '-');
@@ -997,7 +1097,9 @@ sub Gemini_SendFunctionResult {
 
   <b>Readings</b><br>
   <ul>
-    <li><b>response</b> - Letzte Textantwort von Gemini</li>
+    <li><b>response</b> - Letzte Textantwort von Gemini (Roh-Markdown)</li>
+    <li><b>responsePlain</b> - Letzte Textantwort, Markdown-Syntax entfernt (reiner Text, ideal fuer Sprachausgabe, Telegram, Notify)</li>
+    <li><b>responseHTML</b> - Letzte Textantwort, Markdown in HTML konvertiert (ideal fuer Tablet-UI, Web-Frontends)</li>
     <li><b>state</b> - Aktueller Status</li>
     <li><b>lastError</b> - Letzter Fehler</li>
     <li><b>chatHistory</b> - Anzahl der Nachrichten im Chat-Verlauf</li>

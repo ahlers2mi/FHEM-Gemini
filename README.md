@@ -136,7 +136,9 @@ get GeminiAI chatHistory
 
 | Reading | Beschreibung |
 |---|---|
-| `response` | Letzte Textantwort von Gemini |
+| `response` | Letzte Textantwort von Gemini (Roh-Markdown) |
+| `responsePlain` | Letzte Textantwort, Markdown-Syntax entfernt (reiner Text, ideal für Sprachausgabe, Telegram, Notify) |
+| `responseHTML` | Letzte Textantwort, Markdown in HTML konvertiert (ideal für Tablet-UI, Web-Frontends) |
 | `state` | Aktueller Status (`initialized`, `requesting...`, `ok`, `error`, `disabled`) |
 | `lastError` | Letzter Fehler |
 | `chatHistory` | Anzahl der Nachrichten im Chat-Verlauf |
@@ -147,6 +149,7 @@ get GeminiAI chatHistory
 
 | Version | Datum | Änderung |
 |---|---|---|
+| 2.9.0 | 2026-04-10 | Neu: Readings `responsePlain` (Markdown bereinigt) und `responseHTML` (Markdown zu HTML) |
 | 2.8.0 | 2026-04-10 | Fix: History-Trimming entfernt verwaiste `functionResponse`-User-Turns am Anfang des Verlaufs (API-Fehler 400, Issue #8) |
 | 2.7.0 | 2026-04-10 | Fix: `set`-Befehle werden mit Typ-Informationen (z.B. `:slider,0,1,100`) an Gemini übermittelt; interne FHEM-Einträge (`attrTemplate`, `associate`) per Blacklist gefiltert |
 | 2.6.0 | 2026-04-10 | Fix: `getAllSets()` statt direktem Hash-Zugriff für `set`-Befehle, damit dynamisch berechnete `set`-Listen korrekt übermittelt werden |
