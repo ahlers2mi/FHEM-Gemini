@@ -40,6 +40,9 @@
 ##############################################################################
 
 # Versionshistorie:
+# 2.5.0 - 2026-04-10  Fix: Chat-Verlauf-Trimming stellt sicher, dass der Verlauf
+#                          immer mit einem user-Turn beginnt, um API-Fehler 400
+#                          ("function call turn must come after user turn") zu vermeiden
 # 2.4.0 - 2026-04-09  Neues Attribut disableHistory: Chat-Verlauf deaktivieren,
 #                          jede Anfrage wird als eigenstaendiges Gespraech behandelt
 # 2.3.0 - 2026-04-09  Gemini_BuildControlContext gibt jetzt auch die
@@ -257,6 +260,10 @@ sub Gemini_SendRequest {
     };
 
     while (scalar(@{$hash->{CHAT}}) > $maxHistory) {
+        shift @{$hash->{CHAT}};
+    }
+    # Ensure history always starts with a user turn (API requirement)
+    while (@{$hash->{CHAT}} && $hash->{CHAT}[0]{role} ne 'user') {
         shift @{$hash->{CHAT}};
     }
 
@@ -594,6 +601,11 @@ sub Gemini_SendControl {
     };
 
     while (scalar(@{$hash->{CHAT}}) > $maxHistory) {
+        shift @{$hash->{CHAT}};
+        $hash->{CONTROL_START_IDX}-- if $hash->{CONTROL_START_IDX} > 0;
+    }
+    # Ensure history always starts with a user turn (API requirement)
+    while (@{$hash->{CHAT}} && $hash->{CHAT}[0]{role} ne 'user') {
         shift @{$hash->{CHAT}};
         $hash->{CONTROL_START_IDX}-- if $hash->{CONTROL_START_IDX} > 0;
     }
