@@ -53,7 +53,7 @@ attr GeminiAI apiKey DEIN-GOOGLE-GEMINI-API-KEY
 attr GeminiAI model gemini-3.1-flash-lite-preview
 ```
 
-Das ist bereits der Standard. Andere verfügbare Modelle: `gemini-2.0-flash`, `gemini-1.5-pro` usw.
+Das ist bereits der Standard. Andere verfügbare Modelle: `gemini-3.1-flash-lite-preview`, `gemini-3.1-flash-image-preview`, `gemini-3.1-pro-preview`, `gemini-3-flash-preview`, `gemini-3-pro-image-preview` usw.
 
 ## Verwendung
 
