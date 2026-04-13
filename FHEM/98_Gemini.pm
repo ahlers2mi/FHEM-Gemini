@@ -21,6 +21,10 @@
 #                   werden automatisch für askAboutDevices verwendet
 #   controlList   - Komma-getrennte Liste der Geräte, die Gemini steuern darf
 #   disableHistory - Chat-Verlauf deaktivieren (0/1); jede Anfrage wird als eigenstaendiges Gespraech behandelt
+#   readingBlacklist - Leerzeichen-getrennte Liste von Reading-/Befehlsnamen, die nicht an Gemini
+#                      uebermittelt werden; Wildcards (*) werden unterstuetzt.
+#                      Standard: attrTemplate associate R-* RegL_* associatedWith peerListRDate
+#                                protLastRcv lastTimeSync lastcmd Heap LoadAvg Uptime Wifi_*
 #
 # Set-Befehle:
 #   ask <Frage>                    - Textfrage stellen
@@ -42,7 +46,12 @@
 ##############################################################################
 
 # Versionshistorie:
-# 2.9.0 - 2026-04-10  Neu: Readings responsePlain (Markdown bereinigt) und
+# 3.0.0 - 2026-04-13  Neu: Attribut readingBlacklist (leerzeichen-getrennt, Wildcards moeglich)
+#                          ersetzt die hardcodierte Blacklist; Standard-Eintraege erweitert um
+#                          R-*, RegL_*, associatedWith, peerListRDate, protLastRcv, lastTimeSync,
+#                          lastcmd, Heap, LoadAvg, Uptime, Wifi_*; Blacklist wird nun in
+#                          Gemini_BuildDeviceContext, get_device_state und
+#                          Gemini_BuildControlContext angewendet
 #                          responseHTML (Markdown zu HTML) werden in
 #                          Gemini_HandleResponse und Gemini_HandleControlResponse
 #                          befuellt; neue Hilfsfunktionen Gemini_MarkdownToPlain
@@ -115,6 +124,7 @@ sub Gemini_Initialize {
         'controlList:textField-long ' .
         'deviceRoom:textField-long ' .
         'systemPrompt:textField-long ' .
+        'readingBlacklist:textField-long ' .
         $readingFnAttributes;
 
     return undef;
@@ -129,7 +139,7 @@ sub Gemini_Define {
     my $name = $args[0];
     $hash->{NAME}        = $name;
     $hash->{CHAT}        = [];   # Chat-Verlauf als Array-Referenz
-    $hash->{VERSION}     = '2.9.0';
+    $hash->{VERSION}     = '3.0.0';
 
     readingsSingleUpdate($hash, 'state',             'initialized', 1);
     readingsSingleUpdate($hash, 'response',          '-',           0);
@@ -524,6 +534,36 @@ sub Gemini_GetMimeType {
 }
 
 ##############################################################################
+# Hilfsfunktion: Blacklist-Muster fuer Readings/Befehle liefern
+##############################################################################
+sub Gemini_GetBlacklist {
+    my ($hash) = @_;
+    my $name = $hash->{NAME};
+    my $attr = AttrVal($name, 'readingBlacklist', '');
+    if ($attr ne '') {
+        return split(/\s+/, $attr);
+    }
+    return qw(
+        attrTemplate associate R-* RegL_* associatedWith
+        peerListRDate protLastRcv lastTimeSync lastcmd
+        Heap LoadAvg Uptime Wifi_*
+    );
+}
+
+##############################################################################
+# Hilfsfunktion: Pruefen ob ein Name auf ein Blacklist-Muster passt
+##############################################################################
+sub Gemini_IsBlacklisted {
+    my ($entry, @patterns) = @_;
+    for my $pat (@patterns) {
+        my $regex = quotemeta($pat);
+        $regex =~ s/\\\*/.*/g;
+        return 1 if $entry =~ /^$regex$/;
+    }
+    return 0;
+}
+
+##############################################################################
 # FHEM Device-Kontext für Gemini aufbauen
 ##############################################################################
 sub Gemini_BuildDeviceContext {
@@ -565,7 +605,8 @@ sub Gemini_BuildDeviceContext {
 
     return '' unless @devices;
 
-    my $context = "Aktueller Status der Smart-Home Geräte:\n";
+    my $context  = "Aktueller Status der Smart-Home Geräte:\n";
+    my @blacklist = Gemini_GetBlacklist($hash);
 
     for my $devName (@devices) {
         next unless exists $main::defs{$devName};
@@ -584,6 +625,7 @@ sub Gemini_BuildDeviceContext {
             $context .= "  Readings:\n";
             for my $reading (sort keys %{$dev->{READINGS}}) {
                 next if $reading eq 'state';
+                next if Gemini_IsBlacklisted($reading, @blacklist);
                 my $val  = $dev->{READINGS}{$reading}{VAL}  // '';
                 my $time = $dev->{READINGS}{$reading}{TIME} // '';
                 $context .= "    $reading: $val (Stand: $time)\n";
@@ -614,9 +656,7 @@ sub Gemini_BuildControlContext {
     my @devices = split(/\s*,\s*/, $controlList);
     return '' unless @devices;
 
-    # Interne FHEM-Eintraege, die nicht an Gemini uebermittelt werden sollen
-    my @blacklist = qw(attrTemplate associate);
-    my %blackset  = map { $_ => 1 } @blacklist;
+    my @blacklist = Gemini_GetBlacklist($hash);
 
     my $context = "Verfuegbare Geraete zum Steuern:\n";
     for my $devName (@devices) {
@@ -631,7 +671,7 @@ sub Gemini_BuildControlContext {
         for my $entry (split(/\s+/, $setListRaw)) {
             my ($cmdName) = split(/:/, $entry, 2);  # Befehlsname zum Filtern extrahieren
             next unless $cmdName;
-            next if $blackset{$cmdName};
+            next if Gemini_IsBlacklisted($cmdName, @blacklist);
             push @cmds, $entry;                     # kompletten Eintrag inkl. :slider,... behalten
         }
 
@@ -897,6 +937,7 @@ sub Gemini_HandleControlResponse {
 
                 if (exists $main::defs{$device}) {
                     my $dev = $main::defs{$device};
+                    my @blacklist = Gemini_GetBlacklist($hash);
                     $stateResult  = "Geraet: $device\n";
                     $stateResult .= "Typ: " . ($dev->{TYPE} // 'unbekannt') . "\n";
                     $stateResult .= "Status: " . ReadingsVal($device, 'state', 'unbekannt') . "\n";
@@ -904,6 +945,7 @@ sub Gemini_HandleControlResponse {
                         $stateResult .= "Readings:\n";
                         for my $reading (sort keys %{$dev->{READINGS}}) {
                             next if $reading eq 'state';
+                            next if Gemini_IsBlacklisted($reading, @blacklist);
                             my $val = $dev->{READINGS}{$reading}{VAL} // '';
                             $stateResult .= "  $reading: $val\n";
                         }
