@@ -779,7 +779,7 @@ sub Gemini_GetControlTools {
         function_declarations => [
             {
                 name        => 'set_device',
-                description => 'Führt einen FHEM set-Befehl auf einem Gerät aus, z.B. on, off oder einen numerischen Wert',
+                description => 'Führt einen FHEM set-Befehl auf einem Gerät aus, z.B. on, off oder einen numerischen Wert. Kann parallel mehrfach aufgerufen werden, um mehrere Geräte gleichzeitig zu schalten.',
                 parameters  => {
                     type       => 'object',
                     properties => {
@@ -964,96 +964,23 @@ sub Gemini_HandleControlResponse {
     my $content   = $candidate->{content};
     my $parts     = $content->{parts} // [];
 
-    # Function Call prüfen
+    # Function Calls prüfen – alle parallel zurückgegebenen Calls sammeln und gemeinsam abarbeiten
+    my @fcResults = ();
     for my $part (@$parts) {
         if (exists $part->{functionCall}) {
             my $fc     = $part->{functionCall};
-            my $fcName = $fc->{name}  // '';
-            my $args   = $fc->{args}  // {};
-
-            # Gesamtes content-Objekt der Modell-Antwort speichern (Fix 2.0.2)
-            push @{$hash->{CHAT}}, $content;
-
-            if ($fcName eq 'set_device') {
-                my $device  = $args->{device}  // '';
-                my $command = $args->{command} // '';
-
-                if ($command =~ /[;|`\$\(\)<>
-]/) {
-                    my $errMsg = "Fehler: Ungültiger Befehl '$command' (unerlaubte Zeichen)";
-                    Log3 $name, 2, "Gemini ($name): $errMsg";
-                    Gemini_SendFunctionResult($hash, $fcName, $errMsg);
-                    return;
-                }
-
-                my %allowed = map { $_ => 1 } Gemini_GetControlDevices($hash);
-
-                if ($allowed{$device} && exists $main::defs{$device}) {
-                    my $setResult = CommandSet(undef, "$device $command");
-                    $setResult //= 'ok';
-                    $setResult = 'ok' if $setResult eq '';
-
-                    my $cmdForReading = "$device $command";
-                    utf8::encode($cmdForReading) if utf8::is_utf8($cmdForReading);
-                    my $resForReading = $setResult;
-                    utf8::encode($resForReading) if utf8::is_utf8($resForReading);
-
-                    readingsBeginUpdate($hash);
-                    readingsBulkUpdate($hash, 'lastCommand',       $cmdForReading);
-                    readingsBulkUpdate($hash, 'lastCommandResult', $resForReading);
-                    readingsEndUpdate($hash, 1);
-
-                    Log3 $name, 3, "Gemini ($name): set $device $command -> $setResult";
-                    Gemini_SendFunctionResult($hash, $fcName, "OK: $device $command ausgefuehrt");
-                } else {
-                    my $errMsg = "Fehler: Geraet '$device' nicht in controlList oder nicht vorhanden";
-
-                    my $cmdForReading = "$device $command";
-                    utf8::encode($cmdForReading) if utf8::is_utf8($cmdForReading);
-                    my $resForReading = $errMsg;
-                    utf8::encode($resForReading) if utf8::is_utf8($resForReading);
-
-                    readingsBeginUpdate($hash);
-                    readingsBulkUpdate($hash, 'lastCommand',       $cmdForReading);
-                    readingsBulkUpdate($hash, 'lastCommandResult', $resForReading);
-                    readingsEndUpdate($hash, 1);
-
-                    Log3 $name, 2, "Gemini ($name): $errMsg";
-                    Gemini_SendFunctionResult($hash, $fcName, $errMsg);
-                }
-                return;
-
-            } elsif ($fcName eq 'get_device_state') {
-                my $device = $args->{device} // '';
-                my $stateResult;
-
-                if (exists $main::defs{$device}) {
-                    my $dev = $main::defs{$device};
-                    my @blacklist = Gemini_GetBlacklist($hash);
-                    $stateResult  = "Geraet: $device\n";
-                    $stateResult .= "Typ: " . ($dev->{TYPE} // 'unbekannt') . "\n";
-                    $stateResult .= "Status: " . ReadingsVal($device, 'state', 'unbekannt') . "\n";
-                    if (exists $dev->{READINGS}) {
-                        $stateResult .= "Readings:\n";
-                        for my $reading (sort keys %{$dev->{READINGS}}) {
-                            next if $reading eq 'state';
-                            next if Gemini_IsBlacklisted($reading, @blacklist);
-                            my $val = $dev->{READINGS}{$reading}{VAL} // '';
-                            $stateResult .= "  $reading: $val\n";
-                        }
-                    }
-                } else {
-                    $stateResult = "Fehler: Geraet '$device' nicht gefunden";
-                }
-
-                Gemini_SendFunctionResult($hash, $fcName, $stateResult);
-                return;
-
-            } else {
-                Gemini_SendFunctionResult($hash, $fcName, "Fehler: Unbekannte Funktion '$fcName'");
-                return;
-            }
+            my $fcName = $fc->{name} // '';
+            my $args   = $fc->{args} // {};
+            my $result = Gemini_ExecuteFunctionCall($hash, $fcName, $args);
+            push @fcResults, { name => $fcName, result => $result };
         }
+    }
+
+    if (@fcResults) {
+        # Gesamtes content-Objekt der Modell-Antwort einmalig speichern (Fix 2.0.2)
+        push @{$hash->{CHAT}}, $content;
+        Gemini_SendFunctionResults($hash, \@fcResults);
+        return;
     }
 
     # Kein Function Call - finale Textantwort extrahieren
@@ -1100,20 +1027,106 @@ sub Gemini_HandleControlResponse {
 }
 
 ##############################################################################
-# Hilfsfunktion: functionResponse an Gemini zurückschicken
+# Hilfsfunktion: Einzelnen Function Call ausführen, Ergebnis als String zurückgeben
 ##############################################################################
-sub Gemini_SendFunctionResult {
-    my ($hash, $fcName, $resultText) = @_;
+sub Gemini_ExecuteFunctionCall {
+    my ($hash, $fcName, $args) = @_;
     my $name = $hash->{NAME};
+
+    if ($fcName eq 'set_device') {
+        my $device  = $args->{device}  // '';
+        my $command = $args->{command} // '';
+
+        if ($command =~ /[;|`\$\(\)<>\n]/) {
+            my $errMsg = "Fehler: Ungültiger Befehl '$command' (unerlaubte Zeichen)";
+            Log3 $name, 2, "Gemini ($name): $errMsg";
+            return $errMsg;
+        }
+
+        my %allowed = map { $_ => 1 } Gemini_GetControlDevices($hash);
+
+        if ($allowed{$device} && exists $main::defs{$device}) {
+            my $setResult = CommandSet(undef, "$device $command");
+            $setResult //= 'ok';
+            $setResult = 'ok' if $setResult eq '';
+
+            my $cmdForReading = "$device $command";
+            utf8::encode($cmdForReading) if utf8::is_utf8($cmdForReading);
+            my $resForReading = $setResult;
+            utf8::encode($resForReading) if utf8::is_utf8($resForReading);
+
+            readingsBeginUpdate($hash);
+            readingsBulkUpdate($hash, 'lastCommand',       $cmdForReading);
+            readingsBulkUpdate($hash, 'lastCommandResult', $resForReading);
+            readingsEndUpdate($hash, 1);
+
+            Log3 $name, 3, "Gemini ($name): set $device $command -> $setResult";
+            return "OK: $device $command ausgefuehrt";
+        } else {
+            my $errMsg = "Fehler: Geraet '$device' nicht in controlList oder nicht vorhanden";
+
+            my $cmdForReading = "$device $command";
+            utf8::encode($cmdForReading) if utf8::is_utf8($cmdForReading);
+            my $resForReading = $errMsg;
+            utf8::encode($resForReading) if utf8::is_utf8($resForReading);
+
+            readingsBeginUpdate($hash);
+            readingsBulkUpdate($hash, 'lastCommand',       $cmdForReading);
+            readingsBulkUpdate($hash, 'lastCommandResult', $resForReading);
+            readingsEndUpdate($hash, 1);
+
+            Log3 $name, 2, "Gemini ($name): $errMsg";
+            return $errMsg;
+        }
+
+    } elsif ($fcName eq 'get_device_state') {
+        my $device = $args->{device} // '';
+
+        if (exists $main::defs{$device}) {
+            my $dev = $main::defs{$device};
+            my @blacklist = Gemini_GetBlacklist($hash);
+            my $stateResult  = "Geraet: $device\n";
+            $stateResult .= "Typ: " . ($dev->{TYPE} // 'unbekannt') . "\n";
+            $stateResult .= "Status: " . ReadingsVal($device, 'state', 'unbekannt') . "\n";
+            if (exists $dev->{READINGS}) {
+                $stateResult .= "Readings:\n";
+                for my $reading (sort keys %{$dev->{READINGS}}) {
+                    next if $reading eq 'state';
+                    next if Gemini_IsBlacklisted($reading, @blacklist);
+                    my $val = $dev->{READINGS}{$reading}{VAL} // '';
+                    $stateResult .= "  $reading: $val\n";
+                }
+            }
+            return $stateResult;
+        } else {
+            return "Fehler: Geraet '$device' nicht gefunden";
+        }
+
+    } else {
+        return "Fehler: Unbekannte Funktion '$fcName'";
+    }
+}
+
+##############################################################################
+# Hilfsfunktion: Mehrere functionResponse-Ergebnisse in einem Turn an Gemini schicken
+# $results = [{ name => '...', result => '...' }, ...]
+##############################################################################
+sub Gemini_SendFunctionResults {
+    my ($hash, $results) = @_;
+    my $name = $hash->{NAME};
+
+    my @parts = map {
+        {
+            functionResponse => {
+                name     => $_->{name},
+                response => { result => $_->{result} }
+            }
+        }
+    } @$results;
 
     push @{$hash->{CHAT}}, {
         role  => 'user',
-        parts => [{
-            functionResponse => {
-                name     => $fcName,
-                response => { result => $resultText }
-            }
-        }]
+        parts => \@parts
     };
 
     my $apiKey  = AttrVal($name, 'apiKey',   '');
@@ -1159,7 +1172,8 @@ sub Gemini_SendFunctionResult {
         return;
     }
 
-    Log3 $name, 4, "Gemini ($name): FunctionResult fuer '$fcName' gesendet";
+    my $names = join(', ', map { $_->{name} } @$results);
+    Log3 $name, 4, "Gemini ($name): FunctionResults fuer '$names' gesendet";
 
     my $url = "https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}";
 
@@ -1174,6 +1188,14 @@ sub Gemini_SendFunctionResult {
     });
 
     return undef;
+}
+
+##############################################################################
+# Hilfsfunktion: Einzelnes functionResponse-Ergebnis an Gemini schicken (Wrapper)
+##############################################################################
+sub Gemini_SendFunctionResult {
+    my ($hash, $fcName, $resultText) = @_;
+    Gemini_SendFunctionResults($hash, [{ name => $fcName, result => $resultText }]);
 }
 
 1;
