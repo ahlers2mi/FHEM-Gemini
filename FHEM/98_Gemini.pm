@@ -20,6 +20,8 @@
 #   deviceRoom    - Komma-getrennte Raumliste; Geräte mit passendem room-Attribut
 #                   werden automatisch für askAboutDevices verwendet
 #   controlList   - Komma-getrennte Liste der Geräte, die Gemini steuern darf
+#   controlRoom   - Komma-getrennte Raumliste; Geraete mit passendem room-Attribut
+#                   werden automatisch als steuerbar eingestuft (ergaenzt controlList)
 #   disableHistory - Chat-Verlauf deaktivieren (0/1); jede Anfrage wird als eigenstaendiges Gespraech behandelt
 #   readingBlacklist - Leerzeichen-getrennte Liste von Reading-/Befehlsnamen, die nicht an Gemini
 #                      uebermittelt werden; Wildcards (*) werden unterstuetzt.
@@ -30,6 +32,8 @@
 #   ask <Frage>                    - Textfrage stellen
 #   askWithImage <Pfad> <Frage>    - Bild + Frage senden
 #   askAboutDevices [<Frage>]      - Geräte-Statusabfrage
+#   chat <Nachricht>               - Universeller Befehl: allgemeine Fragen, Geraete-Status
+#                                    und Steuerung in einem (ideal fuer Telegram-Integration)
 #   control <Anweisung>            - Gemini steuert Geräte via Function Calling
 #   resetChat                      - Chat-Verlauf löschen
 #
@@ -46,6 +50,11 @@
 ##############################################################################
 
 # Versionshistorie:
+# 3.2.0 - 2026-04-13  Neu: Befehl chat fuer universelle Nachrichten (allgemeine Fragen,
+#                          Geraete-Status und Steuerung in einem Befehl, ideal fuer
+#                          Telegram-Integration); neues Attribut controlRoom analog zu
+#                          deviceRoom fuer steuerbare Geraete; Hilfsfunktion
+#                          Gemini_GetControlDevices kombiniert controlList + controlRoom
 # 3.1.0 - 2026-04-13  Neu: comment-Attribut der Geraete wird nun an Gemini uebermittelt
 #                          (in Gemini_BuildDeviceContext und Gemini_BuildControlContext)
 # 3.0.0 - 2026-04-13  Neu: Attribut readingBlacklist (leerzeichen-getrennt, Wildcards moeglich)
@@ -124,6 +133,7 @@ sub Gemini_Initialize {
         'disableHistory:0,1 ' .
         'deviceList:textField-long ' .
         'controlList:textField-long ' .
+        'controlRoom:textField-long ' .
         'deviceRoom:textField-long ' .
         'systemPrompt:textField-long ' .
         'readingBlacklist:textField-long ' .
@@ -141,7 +151,7 @@ sub Gemini_Define {
     my $name = $args[0];
     $hash->{NAME}        = $name;
     $hash->{CHAT}        = [];   # Chat-Verlauf als Array-Referenz
-    $hash->{VERSION}     = '3.1.0';
+    $hash->{VERSION}     = '3.2.0';
 
     readingsSingleUpdate($hash, 'state',             'initialized', 1);
     readingsSingleUpdate($hash, 'response',          '-',           0);
@@ -192,12 +202,25 @@ sub Gemini_Set {
         Gemini_SendRequest($hash, $question, undef, $deviceContext);
         return undef;
 
+    } elsif ($cmd eq 'chat') {
+        return "Usage: set $name chat <Nachricht>" unless @args;
+        my $message = join(' ', @args);
+        my @controlDevices = Gemini_GetControlDevices($hash);
+        if (@controlDevices) {
+            my $deviceContext = Gemini_BuildDeviceContext($hash);
+            Gemini_SendControl($hash, $message, $deviceContext);
+        } else {
+            my $deviceContext = Gemini_BuildDeviceContext($hash);
+            Gemini_SendRequest($hash, $message, undef, $deviceContext || undef);
+        }
+        return undef;
+
     } elsif ($cmd eq 'control') {
         return "Usage: set $name control <Anweisung>" unless @args;
-        my $controlList = AttrVal($name, 'controlList', '');
-        return "Fehler: Attribut controlList ist nicht gesetzt" unless $controlList;
+        my @controlDevices = Gemini_GetControlDevices($hash);
+        return "Fehler: Weder controlList noch controlRoom ist gesetzt" unless @controlDevices;
         my $instruction = join(' ', @args);
-        Gemini_SendControl($hash, $instruction);
+        Gemini_SendControl($hash, $instruction, undef);
         return undef;
 
     } elsif ($cmd eq 'resetChat') {
@@ -208,7 +231,7 @@ sub Gemini_Set {
         return undef;
 
     } else {
-        return "Unknown argument $cmd, choose one of ask:textField askWithImage:textField askAboutDevices:textField control:textField resetChat:noArg";
+        return "Unknown argument $cmd, choose one of ask:textField askWithImage:textField askAboutDevices:textField chat:textField control:textField resetChat:noArg";
     }
 }
 
@@ -668,16 +691,55 @@ sub Gemini_BuildDeviceContext {
 }
 
 ##############################################################################
+# Hilfsfunktion: Liste aller steuerbaren Geräte ermitteln (controlList + controlRoom)
+##############################################################################
+sub Gemini_GetControlDevices {
+    my ($hash) = @_;
+    my $name = $hash->{NAME};
+
+    my %seen;
+    my @devices;
+
+    # Geräte aus controlRoom sammeln
+    my $controlRoom = AttrVal($name, 'controlRoom', '');
+    if ($controlRoom) {
+        my @rooms = split(/\s*,\s*/, $controlRoom);
+        for my $devName (sort keys %main::defs) {
+            my $devRoomAttr = AttrVal($devName, 'room', '');
+            for my $room (@rooms) {
+                if (grep { $_ eq $room } split(/\s*,\s*/, $devRoomAttr)) {
+                    unless ($seen{$devName}) {
+                        push @devices, $devName;
+                        $seen{$devName} = 1;
+                    }
+                    last;
+                }
+            }
+        }
+    }
+
+    # Geräte aus controlList hinzufügen (Duplikate vermeiden)
+    my $controlList = AttrVal($name, 'controlList', '');
+    if ($controlList) {
+        for my $devName (split(/\s*,\s*/, $controlList)) {
+            unless ($seen{$devName}) {
+                push @devices, $devName;
+                $seen{$devName} = 1;
+            }
+        }
+    }
+
+    return @devices;
+}
+
+##############################################################################
 # Hilfsfunktion: Gerätekontext für control-Befehl aufbauen (Alias-Mapping)
 ##############################################################################
 sub Gemini_BuildControlContext {
     my ($hash) = @_;
     my $name = $hash->{NAME};
 
-    my $controlList = AttrVal($name, 'controlList', '');
-    return '' unless $controlList;
-
-    my @devices = split(/\s*,\s*/, $controlList);
+    my @devices = Gemini_GetControlDevices($hash);
     return '' unless @devices;
 
     my @blacklist = Gemini_GetBlacklist($hash);
@@ -717,7 +779,7 @@ sub Gemini_GetControlTools {
         function_declarations => [
             {
                 name        => 'set_device',
-                description => 'Führt einen FHEM set-Befehl auf einem Gerät aus, z.B. on, off oder einen numerischen Wert',
+                description => 'Führt einen FHEM set-Befehl auf einem Gerät aus, z.B. on, off oder einen numerischen Wert. Kann parallel mehrfach aufgerufen werden, um mehrere Geräte gleichzeitig zu schalten.',
                 parameters  => {
                     type       => 'object',
                     properties => {
@@ -750,13 +812,14 @@ sub Gemini_RollbackControlSession {
     my $startIdx = $hash->{CONTROL_START_IDX} // 0;
     splice(@{$hash->{CHAT}}, $startIdx);
     delete $hash->{CONTROL_START_IDX};
+    delete $hash->{CHAT_EXTRA_CONTEXT};
 }
 
 ##############################################################################
 # Control-Funktion: Gerät steuern via Function Calling
 ##############################################################################
 sub Gemini_SendControl {
-    my ($hash, $instruction) = @_;
+    my ($hash, $instruction, $extraContext) = @_;
     my $name = $hash->{NAME};
 
     if (AttrVal($name, 'disable', 0)) {
@@ -776,7 +839,8 @@ sub Gemini_SendControl {
     my $timeout    = AttrVal($name, 'timeout',    30);
     my $maxHistory = AttrVal($name, 'maxHistory', 20);
 
-    $hash->{CONTROL_START_IDX} = scalar(@{$hash->{CHAT}});
+    $hash->{CONTROL_START_IDX}  = scalar(@{$hash->{CHAT}});
+    $hash->{CHAT_EXTRA_CONTEXT} = $extraContext // '';
 
     push @{$hash->{CHAT}}, {
         role  => 'user',
@@ -821,7 +885,9 @@ sub Gemini_SendControl {
 
     my $fullSystem = '';
     $fullSystem .= $systemPrompt    if $systemPrompt;
-    $fullSystem .= "\n\n"           if $systemPrompt && $controlContext;
+    $fullSystem .= "\n\n"           if $fullSystem && $extraContext;
+    $fullSystem .= $extraContext    if $extraContext;
+    $fullSystem .= "\n\n"           if $fullSystem && $controlContext;
     $fullSystem .= $controlContext  if $controlContext;
 
     if ($fullSystem) {
@@ -898,97 +964,23 @@ sub Gemini_HandleControlResponse {
     my $content   = $candidate->{content};
     my $parts     = $content->{parts} // [];
 
-    # Function Call prüfen
+    # Function Calls prüfen – alle parallel zurückgegebenen Calls sammeln und gemeinsam abarbeiten
+    my @fcResults = ();
     for my $part (@$parts) {
         if (exists $part->{functionCall}) {
             my $fc     = $part->{functionCall};
-            my $fcName = $fc->{name}  // '';
-            my $args   = $fc->{args}  // {};
-
-            # Gesamtes content-Objekt der Modell-Antwort speichern (Fix 2.0.2)
-            push @{$hash->{CHAT}}, $content;
-
-            if ($fcName eq 'set_device') {
-                my $device  = $args->{device}  // '';
-                my $command = $args->{command} // '';
-
-                if ($command =~ /[;|`\$\(\)<>
-]/) {
-                    my $errMsg = "Fehler: Ungültiger Befehl '$command' (unerlaubte Zeichen)";
-                    Log3 $name, 2, "Gemini ($name): $errMsg";
-                    Gemini_SendFunctionResult($hash, $fcName, $errMsg);
-                    return;
-                }
-
-                my $controlList = AttrVal($name, 'controlList', '');
-                my %allowed     = map { $_ => 1 } split(/\s*,\s*/, $controlList);
-
-                if ($allowed{$device} && exists $main::defs{$device}) {
-                    my $setResult = CommandSet(undef, "$device $command");
-                    $setResult //= 'ok';
-                    $setResult = 'ok' if $setResult eq '';
-
-                    my $cmdForReading = "$device $command";
-                    utf8::encode($cmdForReading) if utf8::is_utf8($cmdForReading);
-                    my $resForReading = $setResult;
-                    utf8::encode($resForReading) if utf8::is_utf8($resForReading);
-
-                    readingsBeginUpdate($hash);
-                    readingsBulkUpdate($hash, 'lastCommand',       $cmdForReading);
-                    readingsBulkUpdate($hash, 'lastCommandResult', $resForReading);
-                    readingsEndUpdate($hash, 1);
-
-                    Log3 $name, 3, "Gemini ($name): set $device $command -> $setResult";
-                    Gemini_SendFunctionResult($hash, $fcName, "OK: $device $command ausgefuehrt");
-                } else {
-                    my $errMsg = "Fehler: Geraet '$device' nicht in controlList oder nicht vorhanden";
-
-                    my $cmdForReading = "$device $command";
-                    utf8::encode($cmdForReading) if utf8::is_utf8($cmdForReading);
-                    my $resForReading = $errMsg;
-                    utf8::encode($resForReading) if utf8::is_utf8($resForReading);
-
-                    readingsBeginUpdate($hash);
-                    readingsBulkUpdate($hash, 'lastCommand',       $cmdForReading);
-                    readingsBulkUpdate($hash, 'lastCommandResult', $resForReading);
-                    readingsEndUpdate($hash, 1);
-
-                    Log3 $name, 2, "Gemini ($name): $errMsg";
-                    Gemini_SendFunctionResult($hash, $fcName, $errMsg);
-                }
-                return;
-
-            } elsif ($fcName eq 'get_device_state') {
-                my $device = $args->{device} // '';
-                my $stateResult;
-
-                if (exists $main::defs{$device}) {
-                    my $dev = $main::defs{$device};
-                    my @blacklist = Gemini_GetBlacklist($hash);
-                    $stateResult  = "Geraet: $device\n";
-                    $stateResult .= "Typ: " . ($dev->{TYPE} // 'unbekannt') . "\n";
-                    $stateResult .= "Status: " . ReadingsVal($device, 'state', 'unbekannt') . "\n";
-                    if (exists $dev->{READINGS}) {
-                        $stateResult .= "Readings:\n";
-                        for my $reading (sort keys %{$dev->{READINGS}}) {
-                            next if $reading eq 'state';
-                            next if Gemini_IsBlacklisted($reading, @blacklist);
-                            my $val = $dev->{READINGS}{$reading}{VAL} // '';
-                            $stateResult .= "  $reading: $val\n";
-                        }
-                    }
-                } else {
-                    $stateResult = "Fehler: Geraet '$device' nicht gefunden";
-                }
-
-                Gemini_SendFunctionResult($hash, $fcName, $stateResult);
-                return;
-
-            } else {
-                Gemini_SendFunctionResult($hash, $fcName, "Fehler: Unbekannte Funktion '$fcName'");
-                return;
-            }
+            my $fcName = $fc->{name} // '';
+            my $args   = $fc->{args} // {};
+            my $result = Gemini_ExecuteFunctionCall($hash, $fcName, $args);
+            push @fcResults, { name => $fcName, result => $result };
         }
+    }
+
+    if (@fcResults) {
+        # Gesamtes content-Objekt der Modell-Antwort einmalig speichern (Fix 2.0.2)
+        push @{$hash->{CHAT}}, $content;
+        Gemini_SendFunctionResults($hash, \@fcResults);
+        return;
     }
 
     # Kein Function Call - finale Textantwort extrahieren
@@ -1010,6 +1002,7 @@ sub Gemini_HandleControlResponse {
     push @{$hash->{CHAT}}, $content;
 
     delete $hash->{CONTROL_START_IDX};
+    delete $hash->{CHAT_EXTRA_CONTEXT};
 
     my $responseForReading = $responseUnicode;
     utf8::encode($responseForReading) if utf8::is_utf8($responseForReading);
@@ -1034,20 +1027,106 @@ sub Gemini_HandleControlResponse {
 }
 
 ##############################################################################
-# Hilfsfunktion: functionResponse an Gemini zurückschicken
+# Hilfsfunktion: Einzelnen Function Call ausführen, Ergebnis als String zurückgeben
 ##############################################################################
-sub Gemini_SendFunctionResult {
-    my ($hash, $fcName, $resultText) = @_;
+sub Gemini_ExecuteFunctionCall {
+    my ($hash, $fcName, $args) = @_;
     my $name = $hash->{NAME};
+
+    if ($fcName eq 'set_device') {
+        my $device  = $args->{device}  // '';
+        my $command = $args->{command} // '';
+
+        if ($command =~ /[;|`\$\(\)<>\n]/) {
+            my $errMsg = "Fehler: Ungültiger Befehl '$command' (unerlaubte Zeichen)";
+            Log3 $name, 2, "Gemini ($name): $errMsg";
+            return $errMsg;
+        }
+
+        my %allowed = map { $_ => 1 } Gemini_GetControlDevices($hash);
+
+        if ($allowed{$device} && exists $main::defs{$device}) {
+            my $setResult = CommandSet(undef, "$device $command");
+            $setResult //= 'ok';
+            $setResult = 'ok' if $setResult eq '';
+
+            my $cmdForReading = "$device $command";
+            utf8::encode($cmdForReading) if utf8::is_utf8($cmdForReading);
+            my $resForReading = $setResult;
+            utf8::encode($resForReading) if utf8::is_utf8($resForReading);
+
+            readingsBeginUpdate($hash);
+            readingsBulkUpdate($hash, 'lastCommand',       $cmdForReading);
+            readingsBulkUpdate($hash, 'lastCommandResult', $resForReading);
+            readingsEndUpdate($hash, 1);
+
+            Log3 $name, 3, "Gemini ($name): set $device $command -> $setResult";
+            return "OK: $device $command ausgefuehrt";
+        } else {
+            my $errMsg = "Fehler: Geraet '$device' nicht in controlList oder nicht vorhanden";
+
+            my $cmdForReading = "$device $command";
+            utf8::encode($cmdForReading) if utf8::is_utf8($cmdForReading);
+            my $resForReading = $errMsg;
+            utf8::encode($resForReading) if utf8::is_utf8($resForReading);
+
+            readingsBeginUpdate($hash);
+            readingsBulkUpdate($hash, 'lastCommand',       $cmdForReading);
+            readingsBulkUpdate($hash, 'lastCommandResult', $resForReading);
+            readingsEndUpdate($hash, 1);
+
+            Log3 $name, 2, "Gemini ($name): $errMsg";
+            return $errMsg;
+        }
+
+    } elsif ($fcName eq 'get_device_state') {
+        my $device = $args->{device} // '';
+
+        if (exists $main::defs{$device}) {
+            my $dev = $main::defs{$device};
+            my @blacklist = Gemini_GetBlacklist($hash);
+            my $stateResult  = "Geraet: $device\n";
+            $stateResult .= "Typ: " . ($dev->{TYPE} // 'unbekannt') . "\n";
+            $stateResult .= "Status: " . ReadingsVal($device, 'state', 'unbekannt') . "\n";
+            if (exists $dev->{READINGS}) {
+                $stateResult .= "Readings:\n";
+                for my $reading (sort keys %{$dev->{READINGS}}) {
+                    next if $reading eq 'state';
+                    next if Gemini_IsBlacklisted($reading, @blacklist);
+                    my $val = $dev->{READINGS}{$reading}{VAL} // '';
+                    $stateResult .= "  $reading: $val\n";
+                }
+            }
+            return $stateResult;
+        } else {
+            return "Fehler: Geraet '$device' nicht gefunden";
+        }
+
+    } else {
+        return "Fehler: Unbekannte Funktion '$fcName'";
+    }
+}
+
+##############################################################################
+# Hilfsfunktion: Mehrere functionResponse-Ergebnisse in einem Turn an Gemini schicken
+# $results = [{ name => '...', result => '...' }, ...]
+##############################################################################
+sub Gemini_SendFunctionResults {
+    my ($hash, $results) = @_;
+    my $name = $hash->{NAME};
+
+    my @parts = map {
+        {
+            functionResponse => {
+                name     => $_->{name},
+                response => { result => $_->{result} }
+            }
+        }
+    } @$results;
 
     push @{$hash->{CHAT}}, {
         role  => 'user',
-        parts => [{
-            functionResponse => {
-                name     => $fcName,
-                response => { result => $resultText }
-            }
-        }]
+        parts => \@parts
     };
 
     my $apiKey  = AttrVal($name, 'apiKey',   '');
@@ -1069,11 +1148,14 @@ sub Gemini_SendFunctionResult {
     );
 
     my $systemPrompt   = AttrVal($name, 'systemPrompt', '');
+    my $extraContext   = $hash->{CHAT_EXTRA_CONTEXT} // '';
     my $controlContext = Gemini_BuildControlContext($hash);
 
     my $fullSystem = '';
     $fullSystem .= $systemPrompt    if $systemPrompt;
-    $fullSystem .= "\n\n"           if $systemPrompt && $controlContext;
+    $fullSystem .= "\n\n"           if $fullSystem && $extraContext;
+    $fullSystem .= $extraContext    if $extraContext;
+    $fullSystem .= "\n\n"           if $fullSystem && $controlContext;
     $fullSystem .= $controlContext  if $controlContext;
 
     if ($fullSystem) {
@@ -1090,7 +1172,8 @@ sub Gemini_SendFunctionResult {
         return;
     }
 
-    Log3 $name, 4, "Gemini ($name): FunctionResult fuer '$fcName' gesendet";
+    my $names = join(', ', map { $_->{name} } @$results);
+    Log3 $name, 4, "Gemini ($name): FunctionResults fuer '$names' gesendet";
 
     my $url = "https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}";
 
@@ -1105,6 +1188,14 @@ sub Gemini_SendFunctionResult {
     });
 
     return undef;
+}
+
+##############################################################################
+# Hilfsfunktion: Einzelnes functionResponse-Ergebnis an Gemini schicken (Wrapper)
+##############################################################################
+sub Gemini_SendFunctionResult {
+    my ($hash, $fcName, $resultText) = @_;
+    Gemini_SendFunctionResults($hash, [{ name => $fcName, result => $resultText }]);
 }
 
 1;
@@ -1141,11 +1232,16 @@ sub Gemini_SendFunctionResult {
       Beispiel: <code>attr GeminiAI deviceRoom Wohnzimmer,Kueche</code>.
       Kann zusammen mit <b>deviceList</b> verwendet werden.</li>
     <li><b>controlList</b> - Komma-getrennte Liste der Geraete, die Gemini per
-      Function Calling steuern darf (Pflicht fuer den control-Befehl).
+      Function Calling steuern darf (Pflicht fuer den control- bzw. chat-Befehl).
       Alias-Namen und verfuegbare set-Befehle der Geraete werden automatisch
       an Gemini uebermittelt, sodass Sprachbefehle mit Alias-Namen und
       passende Befehle automatisch erkannt werden.
       Beispiel: <code>attr GeminiAI controlList Lampe1,Heizung,Rolladen1</code></li>
+    <li><b>controlRoom</b> - Komma-getrennte Raumliste; alle Geraete mit passendem
+      FHEM-room-Attribut werden automatisch als steuerbar eingestuft und ergaenzen
+      die <b>controlList</b>. Duplikate werden automatisch entfernt.
+      Beispiel: <code>attr GeminiAI controlRoom Wohnzimmer,Kueche</code>.
+      Kann zusammen mit <b>controlList</b> verwendet werden.</li>
     <li><b>readingBlacklist</b> - Leerzeichen-getrennte Liste von Reading- bzw.
       Befehlsnamen, die <b>nicht</b> an Gemini uebermittelt werden sollen.
       Wildcards mit <code>*</code> werden unterstuetzt, z.B. <code>R-*</code> oder <code>Wifi_*</code>.<br>
@@ -1161,9 +1257,17 @@ sub Gemini_SendFunctionResult {
     <li><b>ask</b> &lt;Frage&gt; - Textfrage stellen</li>
     <li><b>askWithImage</b> &lt;Bildpfad&gt; &lt;Frage&gt; - Bild + Frage senden</li>
     <li><b>askAboutDevices</b> [&lt;Frage&gt;] - Geraete-Status an Gemini uebergeben und Frage stellen</li>
+    <li><b>chat</b> &lt;Nachricht&gt; - Universeller Befehl fuer allgemeine Fragen, Geraete-Status
+      und Steuerung in einem einzigen Befehl. Ideal fuer die Telegram-Integration.
+      Wenn <b>controlList</b> oder <b>controlRoom</b> konfiguriert ist, kann Gemini sowohl
+      Geraete steuern als auch Statusfragen beantworten. Der Geraete-Status aus
+      <b>deviceList</b>/<b>deviceRoom</b> wird automatisch als Kontext mitgegeben.
+      Beispiel: <code>set GeminiAI chat Ist die Wohnzimmerlampe an?</code><br>
+      Beispiel: <code>set GeminiAI chat Mach bitte das Licht im Flur aus</code><br>
+      Beispiel: <code>set GeminiAI chat Was ist der Unterschied zwischen Waermepumpe und Brennwertkessel?</code></li>
     <li><b>control</b> &lt;Anweisung&gt; - Gemini steuert FHEM-Geraete eigenstaendig per
       Function Calling. Beispiel: <code>set GeminiAI control Mach die Wohnzimmerlampe an</code>.
-      Nur Geraete aus <b>controlList</b> duerfen gesteuert werden.</li>
+      Nur Geraete aus <b>controlList</b>/<b>controlRoom</b> duerfen gesteuert werden.</li>
     <li><b>resetChat</b> - Chat-Verlauf loeschen</li>
   </ul><br>
 

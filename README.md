@@ -151,9 +151,52 @@ set GeminiAI control Fahre alle Rolläden runter
 set GeminiAI control Dimme das Licht im Schlafzimmer auf 30 Prozent
 ```
 
-Gemini löst Alias-Namen automatisch auf interne FHEM-Namen auf und wählt passende `set`-Befehle selbstständig aus. Nur Geräte aus `controlList` dürfen gesteuert werden.
+Gemini löst Alias-Namen automatisch auf interne FHEM-Namen auf und wählt passende `set`-Befehle selbstständig aus. Nur Geräte aus `controlList` (oder `controlRoom`) dürfen gesteuert werden.
 
 Gemini kann im Rahmen eines `control`-Befehls den aktuellen Status eines Geräts selbstständig abfragen (z. B. um zu prüfen, ob eine Lampe bereits an ist), bevor es einen Steuerbefehl absetzt.
+
+Steuerbare Geräte können auch über einen Raum angegeben werden:
+
+```
+attr GeminiAI controlRoom Wohnzimmer,Küche
+set GeminiAI control Mach alle Lichter im Wohnzimmer aus
+```
+
+`controlList` und `controlRoom` können gleichzeitig gesetzt sein – Duplikate werden automatisch entfernt.
+
+### Universeller Chat-Befehl (für Telegram-Integration)
+
+Der `chat`-Befehl ermöglicht allgemeine Fragen, Geräte-Statusabfragen und Steuerungsbefehle in einem einzigen Befehl. Das ist ideal für die Integration mit Telegram oder anderen Messaging-Diensten, bei denen Nachrichten als einfacher Text ankommen:
+
+```
+set GeminiAI chat Ist die Wohnzimmerlampe an?
+set GeminiAI chat Mach bitte das Licht im Flur aus
+set GeminiAI chat Stelle die Heizung auf 20 Grad
+set GeminiAI chat Was ist der Unterschied zwischen Wärmepumpe und Brennwertkessel?
+set GeminiAI chat Gib mir eine Zusammenfassung aller Geräte
+```
+
+Gemini entscheidet selbstständig, ob eine allgemeine Frage beantwortet, ein Gerätestatus abgefragt oder ein Steuerungsbefehl ausgeführt werden soll.
+
+- Wenn `controlList` oder `controlRoom` konfiguriert ist, kann Gemini Geräte steuern und Statusfragen über Function Calling beantworten.
+- Der Geräte-Status aus `deviceList`/`deviceRoom` wird automatisch als Kontext mitgegeben, damit Gemini auch Fragen zu Geräten außerhalb der Steuerliste beantworten kann.
+- Wenn keine Steuerliste konfiguriert ist, funktioniert `chat` wie `ask` (ggf. mit Geräte-Kontext).
+
+**Telegram-Beispiel:**
+
+```perl
+define TelegramBot TELEGRAM <bot-token>
+
+define GeminiTelegramNotify notify TelegramBot:msgText.* {
+    my $msg = ReadingsVal("TelegramBot", "msgText", "");
+    fhem("set GeminiAI chat $msg") if $msg;
+}
+
+define GeminiResponseNotify notify GeminiAI:responsePlain {
+    my $text = ReadingsVal("GeminiAI", "responsePlain", "");
+    fhem("set TelegramBot message $text") if $text;
+}
+```
 
 ### Chat-Verlauf verwalten
 
@@ -184,7 +227,8 @@ get GeminiAI chatHistory
 | `disableHistory` | Chat-Verlauf deaktivieren (`0`/`1`); jede Anfrage wird ohne vorherigen Verlauf an die API gesendet. Der interne Verlauf bleibt erhalten (für `resetChat`), wird aber nicht übertragen. | `0` |
 | `deviceList` | Komma-getrennte Geräteliste für `askAboutDevices`; `*` bezieht alle FHEM-Geräte ein | – |
 | `deviceRoom` | Komma-getrennte Raumliste; alle Geräte mit passendem `room`-Attribut werden für `askAboutDevices` verwendet | – |
-| `controlList` | Komma-getrennte Liste der Geräte, die Gemini steuern darf **(Pflicht für `control`)** | – |
+| `controlList` | Komma-getrennte Liste der Geräte, die Gemini steuern darf **(Pflicht für `control`/`chat` mit Steuerung)** | – |
+| `controlRoom` | Komma-getrennte Raumliste; alle Geräte mit passendem `room`-Attribut werden automatisch als steuerbar eingestuft und ergänzen `controlList`. Duplikate werden entfernt. | – |
 | `readingBlacklist` | Leerzeichen-getrennte Liste von Reading- bzw. Befehlsnamen, die **nicht** an Gemini übermittelt werden. Wildcards mit `*` werden unterstützt (z. B. `R-*`, `Wifi_*`). Wenn nicht gesetzt, gilt die eingebaute Standardliste. | `attrTemplate associate R-* RegL_* associatedWith peerListRDate protLastRcv lastTimeSync lastcmd Heap LoadAvg Uptime Wifi_*` |
 
 ---
@@ -218,6 +262,22 @@ define GeminiNotify notify GeminiAI:responsePlain {
 ```
 
 ### Antwort per Telegram verschicken
+
+Mit dem `chat`-Befehl können eingehende Telegram-Nachrichten direkt an Gemini weitergeleitet werden – Gemini entscheidet selbst, ob eine allgemeine Frage beantwortet, ein Gerätestatus abgefragt oder ein Gerät gesteuert werden soll:
+
+```perl
+define GeminiTelegramIn notify TelegramBot:msgText.* {
+    my $msg = ReadingsVal("TelegramBot", "msgText", "");
+    fhem("set GeminiAI chat $msg") if $msg;
+}
+
+define GeminiTelegramOut notify GeminiAI:responsePlain {
+    my $text = ReadingsVal("GeminiAI", "responsePlain", "");
+    fhem("set TelegramBot message $text") if $text;
+}
+```
+
+Einfaches Weiterleiten der Gemini-Antwort (ohne eingehende Nachrichten):
 
 ```perl
 define GeminiTelegram notify GeminiAI:responsePlain {
@@ -260,7 +320,7 @@ Das Reading `responseHTML` enthält die Antwort als HTML, direkt verwendbar in W
 | `state: error`, `lastError` enthält HTTP-Fehler 401/403 | API Key ungültig oder fehlt | `apiKey`-Attribut prüfen |
 | `state: error`, `lastError` enthält HTTP-Fehler 429 | API-Kontingent überschritten | Anfragen reduzieren oder API-Quota erhöhen |
 | `state: disabled` | Modul deaktiviert | `attr GeminiAI disable 0` setzen |
-| Keine Gerätesteuerung, Fehler „controlList nicht gesetzt" | `controlList` fehlt | `attr GeminiAI controlList Gerät1,Gerät2` setzen |
+| Keine Gerätesteuerung, Fehler „controlList/controlRoom nicht gesetzt" | `controlList` und `controlRoom` fehlen | `attr GeminiAI controlList Gerät1,Gerät2` oder `attr GeminiAI controlRoom Raum1` setzen |
 | Timeout-Fehler bei langen Antworten | Standard-Timeout zu kurz | `attr GeminiAI timeout 60` erhöhen |
 | Antwort enthält interne Readings (z. B. `Wifi_RSSI`) | Blacklist zu kurz | `readingBlacklist` um unerwünschte Readings ergänzen |
 
@@ -276,6 +336,7 @@ attr global verbose 3
 
 | Version | Datum | Änderung |
 |---|---|---|
+| 3.2.0 | 2026-04-13 | Neuer Befehl `chat`: universeller Befehl für allgemeine Fragen, Geräte-Status und Steuerung in einem (ideal für Telegram); neues Attribut `controlRoom`: steuerbare Geräte per Raum angeben (analog zu `deviceRoom`) |
 | 3.1.0 | 2026-04-13 | `comment`-Attribut der Geräte wird jetzt an Gemini übermittelt (in `askAboutDevices` und `control`) |
 | 3.0.0 | 2026-04-13 | Neues Attribut `readingBlacklist`: konfigurierbare Filterliste für Readings und set-Befehle mit Wildcard-Unterstützung (`*`); ersetzt die hardcodierte Blacklist; erweiterte Standardliste |
 | 2.9.0 | 2026-04-10 | Neu: Readings `responsePlain` (Markdown bereinigt) und `responseHTML` (Markdown zu HTML) |
