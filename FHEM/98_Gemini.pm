@@ -396,6 +396,8 @@ sub Gemini_HandleResponse {
 
     utf8::downgrade($data, 1);
 
+    Log3 $name, 5, "Gemini ($name): Antwort raw: $data";
+
     my $result = eval { decode_json($data) };
     if ($@) {
         readingsSingleUpdate($hash, 'lastError', "JSON Parse Fehler: $@", 1);
@@ -413,6 +415,14 @@ sub Gemini_HandleResponse {
         Log3 $name, 1, "Gemini ($name): API Fehler $errCode: $errMsg";
         pop @{$hash->{CHAT}};
         return;
+    }
+    if (exists $result->{usageMetadata}) {
+        my $promptTokenCount = $result->{usageMetadata}{promptTokenCount};
+        my $candidatesTokenCount = $result->{usageMetadata}{candidatesTokenCount};
+        my $totalTokenCount= $result->{usageMetadata}{totalTokenCount};
+        readingsSingleUpdate($hash, 'promptTokenCount', $promptTokenCount, 1);
+        readingsSingleUpdate($hash, 'candidatesTokenCount', $candidatesTokenCount, 1);
+        readingsSingleUpdate($hash, 'totalTokenCount', $totalTokenCount, 1);
     }
 
     my $responseUnicode = '';
@@ -941,6 +951,8 @@ sub Gemini_HandleControlResponse {
 
     utf8::downgrade($data, 1);
 
+    Log3 $name, 5, "Gemini ($name): Control-Antwort raw: $data";
+
     my $result = eval { decode_json($data) };
     if ($@) {
         readingsSingleUpdate($hash, 'lastError', "JSON Parse Fehler: $@", 1);
@@ -958,6 +970,15 @@ sub Gemini_HandleControlResponse {
         Log3 $name, 1, "Gemini ($name): API Fehler $errCode: $errMsg";
         Gemini_RollbackControlSession($hash);
         return;
+    }
+
+    if (exists $result->{usageMetadata}) {
+        my $promptTokenCount = $result->{usageMetadata}{promptTokenCount};
+        my $candidatesTokenCount = $result->{usageMetadata}{candidatesTokenCount};
+        my $totalTokenCount= $result->{usageMetadata}{totalTokenCount};
+        readingsSingleUpdate($hash, 'promptTokenCount', $promptTokenCount, 1);
+        readingsSingleUpdate($hash, 'candidatesTokenCount', $candidatesTokenCount, 1);
+        readingsSingleUpdate($hash, 'totalTokenCount', $totalTokenCount, 1);
     }
 
     my $candidate = $result->{candidates}[0];
