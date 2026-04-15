@@ -50,6 +50,9 @@
 ##############################################################################
 
 # Versionshistorie:
+# 3.3.0 - 2026-04-15  Neu: Metadatareadings
+#                          Reading candidatesTokenCount, promptTokenCount,
+#                          totalTokenCount
 # 3.2.0 - 2026-04-13  Neu: Befehl chat fuer universelle Nachrichten (allgemeine Fragen,
 #                          Geraete-Status und Steuerung in einem Befehl, ideal fuer
 #                          Telegram-Integration); neues Attribut controlRoom analog zu
@@ -151,7 +154,7 @@ sub Gemini_Define {
     my $name = $args[0];
     $hash->{NAME}        = $name;
     $hash->{CHAT}        = [];   # Chat-Verlauf als Array-Referenz
-    $hash->{VERSION}     = '3.2.0';
+    $hash->{VERSION}     = '3.3.0';
 
     readingsSingleUpdate($hash, 'state',             'initialized', 1);
     readingsSingleUpdate($hash, 'response',          '-',           0);
