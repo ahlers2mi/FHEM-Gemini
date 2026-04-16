@@ -121,36 +121,36 @@ use JSON;
 use MIME::Base64;
 
 
-sub Gemini_prefix {
-    my $hash   = shift // return;
-    my $prefix =  shift // q{Gemini};
-    my $old_prefix = $hash->{prefix}; #Beta-User: Marker, evtl. müssen wir uns was für Umbenennungen überlegen...
-    my $name = $hash->{NAME};
-
-
-    Log3 $name, 3, "Gemini ($name): Prefix: $prefix";
-    Log3 $name, 3, "Gemini ($name): Oldprefix: $old_prefix" if defined $old_prefix;
-
-    return if defined $old_prefix && $prefix eq $old_prefix;
-    # provide attributes "GeminiName" etc. for all devices
-    addToAttrList("${prefix}Comment:textField-long",'Gemini');    
-
-    return if !$init_done || !defined $old_prefix;
-
-    my @devs = devspec2array(".*");
-    my @geminis = devspec2array("TYPE=Gemini:FILTER=prefix=$old_prefix");
-
-    for my $detail ( qw( Comment ) ) { 
-        for my $device (@devs) {
-            my $aval = AttrVal($device, "${old_prefix}$detail", undef); 
-            CommandAttr($hash, "$device ${prefix}$detail $aval") if $aval;
-            CommandDeleteAttr($hash, "$device ${old_prefix}$detail");
-        }
-        delFromAttrList("${old_prefix}$detail") if @geminis < 2;
-    }
-
-    return;
-}
+#sub Gemini_prefix {
+#    my $hash   = shift // return;
+#    my $prefix =  shift // q{Gemini};
+#    my $old_prefix = $hash->{prefix}; #Beta-User: Marker, evtl. müssen wir uns was für Umbenennungen überlegen...
+#    my $name = $hash->{NAME};
+#
+#
+#    Log3 $name, 3, "Gemini ($name): Prefix: $prefix";
+#    Log3 $name, 3, "Gemini ($name): Oldprefix: $old_prefix" if defined $old_prefix;
+#
+#    return if defined $old_prefix && $prefix eq $old_prefix;
+#    # provide attributes "GeminiName" etc. for all devices
+#    addToAttrList("${prefix}Comment:textField-long",'Gemini');    
+#
+#    return if !$init_done || !defined $old_prefix;
+#
+#    my @devs = devspec2array(".*");
+#    my @geminis = devspec2array("TYPE=Gemini:FILTER=prefix=$old_prefix");
+#
+#    for my $detail ( qw( Comment ) ) { 
+#        for my $device (@devs) {
+#            my $aval = AttrVal($device, "${old_prefix}$detail", undef); 
+#            CommandAttr($hash, "$device ${prefix}$detail $aval") if $aval;
+#            CommandDeleteAttr($hash, "$device ${old_prefix}$detail");
+#        }
+#        delFromAttrList("${old_prefix}$detail") if @geminis < 2;
+#    }
+#
+#    return;
+#}
 
 sub Gemini_Initialize {
     my ($hash) = @_; 
@@ -175,8 +175,6 @@ sub Gemini_Initialize {
         'readingBlacklist:textField-long ' .
         $readingFnAttributes;
 
-
-#    addToDevAttrList("global", $hash->{NAME} . "Comment:textField-long");
     return undef;
 }
 
@@ -202,8 +200,10 @@ sub Gemini_Define {
     readingsSingleUpdate($hash, 'lastCommand',       '-',           0);
     readingsSingleUpdate($hash, 'lastCommandResult', '-',           0);
 
-    Gemini_prefix($hash, $h->{prefix}) if !defined $hash->{prefix} || defined $h->{prefix} && $hash->{prefix} ne $h->{prefix};
-
+#    Gemini_prefix($hash, $h->{prefix}) if !defined $hash->{prefix} || defined $h->{prefix} && $hash->{prefix} ne $h->{prefix};
+#    addToDevAttrList("global", $hash->{NAME} . "Comment:textField-long");
+    addToAttrList($hash->{NAME} . "Comment:textField-long","Gemini");  
+    
     Log3 $name, 3, "Gemini ($name): Defined";
     return undef;
 }
