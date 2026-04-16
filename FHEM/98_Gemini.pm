@@ -180,8 +180,12 @@ sub Gemini_Initialize {
     return undef;
 }
 
-sub Gemini_Define {
-    my ($hash, $def, $h) = @_;
+sub Gemini_Define {    
+    my $hash = shift;
+    my $def  = shift;
+    my $h    = shift;
+    #parseParams: my ($hash, $def) = @_;
+    
     my @args = split('[ \t]+', $def);
 
     return "Usage: define <name> Gemini" if (@args < 2);
