@@ -123,24 +123,23 @@ use MIME::Base64;
 
 sub Gemini_prefix {
     my $hash   = shift // return;
-    my $prefix =  shift // q{gemini};
+    my $prefix =  shift // q{Gemini};
     my $old_prefix = $hash->{prefix}; #Beta-User: Marker, evtl. müssen wir uns was für Umbenennungen überlegen...
 
     return if defined $old_prefix && $prefix eq $old_prefix;
-
-    addToDevAttrList($_, "${prefix}Comment:textField-long",'Gemini');    
+    # provide attributes "GeminiName" etc. for all devices
+    addToAttrList("${prefix}Comment:textField-long",'Gemini');    
 
     return if !$init_done || !defined $old_prefix;
 
-    my @devs = devspec2array("$hash->{devspec}");
+    my @devs = devspec2array(".*");
     my @geminis = devspec2array("TYPE=Gemini:FILTER=prefix=$old_prefix");
 
-    for my $detail ( qw( apiKey model maxHistory timeout disable disableHistory deviceList controlList controlRoom deviceRoom systemPrompt readingBlacklist ) ) { 
+    for my $detail ( qw( Comment ) ) { 
         for my $device (@devs) {
             my $aval = AttrVal($device, "${old_prefix}$detail", undef); 
             CommandAttr($hash, "$device ${prefix}$detail $aval") if $aval;
-            CommandDeleteAttr($hash, "$device ${old_prefix}$detail") if @geminis < 2;
-            delFromDevAttrList($device,"${old_prefix}$detail") if @geminis < 2 && ($detail eq "Comment");
+            CommandDeleteAttr($hash, "$device ${old_prefix}$detail");
         }
         delFromAttrList("${old_prefix}$detail") if @geminis < 2;
     }
