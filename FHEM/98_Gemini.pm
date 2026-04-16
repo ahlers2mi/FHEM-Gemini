@@ -781,7 +781,7 @@ sub Gemini_BuildControlContext {
 
         my $cmdsStr       = @cmds ? join(', ', @cmds) : 'unbekannt';
         my $comment       = AttrVal($devName, 'comment', '');
-        my $geminiComment = AttrVal($devName, 'geminiComment', '');
+        my $geminiComment = AttrVal($devName, $name . 'Comment', '');
         $context .= "  $alias (intern: $devName)";
         $context .= " -- Allgemeine Beschreibung: $comment" if $comment;
         $context .= " -- Beschreibung für Gemini: $geminiComment" if $geminiComment;
