@@ -125,6 +125,7 @@ sub Gemini_prefix {
     my $hash   = shift // return;
     my $prefix =  shift // q{Gemini};
     my $old_prefix = $hash->{prefix}; #Beta-User: Marker, evtl. müssen wir uns was für Umbenennungen überlegen...
+    my $name = $hash->{NAME};
 
 
     Log3 $name, 3, "Gemini ($name): Prefix: $prefix";
