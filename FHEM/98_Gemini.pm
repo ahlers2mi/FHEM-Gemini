@@ -50,6 +50,7 @@
 ##############################################################################
 
 # Versionshistorie:
+# 3.4.0 - 2026-04-16  Neu: Eigenes Globalses Attribut geminiComment für Steuerinfos an Gemini
 # 3.3.0 - 2026-04-15  Neu: Metadatareadings
 #                          Reading candidatesTokenCount, promptTokenCount,
 #                          totalTokenCount
@@ -119,6 +120,38 @@ use HttpUtils;
 use JSON;
 use MIME::Base64;
 
+
+#sub Gemini_prefix {
+#    my $hash   = shift // return;
+#    my $prefix =  shift // q{Gemini};
+#    my $old_prefix = $hash->{prefix}; #Beta-User: Marker, evtl. müssen wir uns was für Umbenennungen überlegen...
+#    my $name = $hash->{NAME};
+#
+#
+#    Log3 $name, 3, "Gemini ($name): Prefix: $prefix";
+#    Log3 $name, 3, "Gemini ($name): Oldprefix: $old_prefix" if defined $old_prefix;
+#
+#    return if defined $old_prefix && $prefix eq $old_prefix;
+#    # provide attributes "GeminiName" etc. for all devices
+#    addToAttrList("${prefix}Comment:textField-long",'Gemini');    
+#
+#    return if !$init_done || !defined $old_prefix;
+#
+#    my @devs = devspec2array(".*");
+#    my @geminis = devspec2array("TYPE=Gemini:FILTER=prefix=$old_prefix");
+#
+#    for my $detail ( qw( Comment ) ) { 
+#        for my $device (@devs) {
+#            my $aval = AttrVal($device, "${old_prefix}$detail", undef); 
+#            CommandAttr($hash, "$device ${prefix}$detail $aval") if $aval;
+#            CommandDeleteAttr($hash, "$device ${old_prefix}$detail");
+#        }
+#        delFromAttrList("${old_prefix}$detail") if @geminis < 2;
+#    }
+#
+#    return;
+#}
+
 sub Gemini_Initialize {
     my ($hash) = @_; 
 
@@ -145,8 +178,12 @@ sub Gemini_Initialize {
     return undef;
 }
 
-sub Gemini_Define {
-    my ($hash, $def) = @_;
+sub Gemini_Define {    
+    my $hash = shift;
+    my $def  = shift;
+    my $h    = shift;
+    #parseParams: my ($hash, $def) = @_;
+    
     my @args = split('[ \t]+', $def);
 
     return "Usage: define <name> Gemini" if (@args < 2);
@@ -154,7 +191,7 @@ sub Gemini_Define {
     my $name = $args[0];
     $hash->{NAME}        = $name;
     $hash->{CHAT}        = [];   # Chat-Verlauf als Array-Referenz
-    $hash->{VERSION}     = '3.3.0';
+    $hash->{VERSION}     = '3.4.0';
 
     readingsSingleUpdate($hash, 'state',             'initialized', 1);
     readingsSingleUpdate($hash, 'response',          '-',           0);
@@ -163,6 +200,10 @@ sub Gemini_Define {
     readingsSingleUpdate($hash, 'lastCommand',       '-',           0);
     readingsSingleUpdate($hash, 'lastCommandResult', '-',           0);
 
+#    Gemini_prefix($hash, $h->{prefix}) if !defined $hash->{prefix} || defined $h->{prefix} && $hash->{prefix} ne $h->{prefix};
+#    addToDevAttrList("global", $hash->{NAME} . "Comment:textField-long");
+    addToAttrList($hash->{NAME} . "Comment:textField-long","Gemini");  
+    
     Log3 $name, 3, "Gemini ($name): Defined";
     return undef;
 }
@@ -692,7 +733,9 @@ sub Gemini_BuildDeviceContext {
             }
         }
 
-        for my $attrName (qw(room group alias comment)) {
+        my @attributes = ('room', 'group', 'alias', 'comment', $hash->{NAME} . "Comment");
+
+        for my $attrName (@attributes) {
             my $attrVal = AttrVal($devName, $attrName, '');
             $context .= "  $attrName: $attrVal\n" if $attrVal;
         }
@@ -774,10 +817,12 @@ sub Gemini_BuildControlContext {
             push @cmds, $entry;                     # kompletten Eintrag inkl. :slider,... behalten
         }
 
-        my $cmdsStr = @cmds ? join(', ', @cmds) : 'unbekannt';
-        my $comment = AttrVal($devName, 'comment', '');
+        my $cmdsStr       = @cmds ? join(', ', @cmds) : 'unbekannt';
+        my $comment       = AttrVal($devName, 'comment', '');
+        my $geminiComment = AttrVal($devName, $name . 'Comment', '');
         $context .= "  $alias (intern: $devName)";
-        $context .= " -- Beschreibung: $comment" if $comment;
+        $context .= " -- Allgemeine Beschreibung: $comment" if $comment;
+        $context .= " -- Beschreibung für Gemini: $geminiComment" if $geminiComment;
         $context .= " -- set-Befehle: $cmdsStr\n";
     }
 
