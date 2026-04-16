@@ -50,6 +50,7 @@
 ##############################################################################
 
 # Versionshistorie:
+# 3.4.0 - 2026-04-16  Neu: Eigenes Globalses Attribut geminiComment für Steuerinfos an Gemini
 # 3.3.0 - 2026-04-15  Neu: Metadatareadings
 #                          Reading candidatesTokenCount, promptTokenCount,
 #                          totalTokenCount
@@ -142,6 +143,8 @@ sub Gemini_Initialize {
         'readingBlacklist:textField-long ' .
         $readingFnAttributes;
 
+
+    addToDevAttrList("global", "geminiComment:textField-long");
     return undef;
 }
 
@@ -154,7 +157,7 @@ sub Gemini_Define {
     my $name = $args[0];
     $hash->{NAME}        = $name;
     $hash->{CHAT}        = [];   # Chat-Verlauf als Array-Referenz
-    $hash->{VERSION}     = '3.3.0';
+    $hash->{VERSION}     = '3.4.0';
 
     readingsSingleUpdate($hash, 'state',             'initialized', 1);
     readingsSingleUpdate($hash, 'response',          '-',           0);
@@ -692,7 +695,7 @@ sub Gemini_BuildDeviceContext {
             }
         }
 
-        for my $attrName (qw(room group alias comment)) {
+        for my $attrName (qw(room group alias comment geminiComment)) {
             my $attrVal = AttrVal($devName, $attrName, '');
             $context .= "  $attrName: $attrVal\n" if $attrVal;
         }
@@ -774,10 +777,12 @@ sub Gemini_BuildControlContext {
             push @cmds, $entry;                     # kompletten Eintrag inkl. :slider,... behalten
         }
 
-        my $cmdsStr = @cmds ? join(', ', @cmds) : 'unbekannt';
-        my $comment = AttrVal($devName, 'comment', '');
+        my $cmdsStr       = @cmds ? join(', ', @cmds) : 'unbekannt';
+        my $comment       = AttrVal($devName, 'comment', '');
+        my $geminiComment = AttrVal($devName, 'geminiComment', '');
         $context .= "  $alias (intern: $devName)";
-        $context .= " -- Beschreibung: $comment" if $comment;
+        $context .= " -- Allgemeine Beschreibung: $comment" if $comment;
+        $context .= " -- Beschreibung für Gemini: $geminiComment" if $geminiComment;
         $context .= " -- set-Befehle: $cmdsStr\n";
     }
 
