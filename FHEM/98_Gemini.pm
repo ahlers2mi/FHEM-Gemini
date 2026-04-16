@@ -120,6 +120,33 @@ use HttpUtils;
 use JSON;
 use MIME::Base64;
 
+
+sub Gemini_prefix {
+    my $hash   = shift // return;
+    my $prefix =  shift // q{geminis};
+    my $old_prefix = $hash->{prefix}; #Beta-User: Marker, evtl. müssen wir uns was für Umbenennungen überlegen...
+
+    return if defined $old_prefix && $prefix eq $old_prefix;
+
+    addToDevAttrList($_, "${prefix}Comment:textField-long",'Gemini');    
+
+    return if !$init_done || !defined $old_prefix;
+ 
+    my @geminis = devspec2array("TYPE=Gemini:FILTER=prefix=$old_prefix");
+
+    for my $detail ( qw( apiKey model maxHistory timeout disable disableHistory deviceList controlList controlRoom deviceRoom systemPrompt readingBlacklist ) ) { 
+        for my $device (@devs) {
+            my $aval = AttrVal($device, "${old_prefix}$detail", undef); 
+            CommandAttr($hash, "$device ${prefix}$detail $aval") if $aval;
+            CommandDeleteAttr($hash, "$device ${old_prefix}$detail") if @geminis < 2;
+            delFromDevAttrList($device,"${old_prefix}$detail") if @geminis < 2 && ($detail eq "Comment");
+        }
+        delFromAttrList("${old_prefix}$detail") if @geminis < 2;
+    }
+
+    return;
+}
+
 sub Gemini_Initialize {
     my ($hash) = @_; 
 
