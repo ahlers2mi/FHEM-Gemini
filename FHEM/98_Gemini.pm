@@ -144,7 +144,7 @@ sub Gemini_Initialize {
         $readingFnAttributes;
 
 
-    addToDevAttrList("global", "geminiComment:textField-long");
+    addToDevAttrList("global", $hash->{NAME} . "Comment:textField-long");
     return undef;
 }
 
@@ -695,7 +695,9 @@ sub Gemini_BuildDeviceContext {
             }
         }
 
-        for my $attrName (qw(room group alias comment geminiComment)) {
+        my @attributes = ('room', 'group', 'alias', 'comment', $hash->{NAME} . "Comment");
+
+        for my $attrName (@attributes) {
             my $attrVal = AttrVal($devName, $attrName, '');
             $context .= "  $attrName: $attrVal\n" if $attrVal;
         }
