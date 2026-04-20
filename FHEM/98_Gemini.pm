@@ -866,7 +866,7 @@ sub Gemini_GetControlTools {
                     properties => {
                         device_name => { 
                             type => 'string', 
-                            description => 'Name des neuen AT-Geräts, z.B. at_Gemini_LichtAus_2145' 
+                            description => 'Name des neuen AT-Geräts, z.B. LichtAus_2145' 
                         },
                         time_spec   => { 
                             type => 'string', 
@@ -892,7 +892,7 @@ sub Gemini_GetControlTools {
                     properties => {
                         device_name => { 
                             type => 'string', 
-                            description => 'Name des neuen NOTIFY-Geräts, z.B. n_Gemini_TuerOffen' 
+                            description => 'Name des neuen NOTIFY-Geräts, z.B. TuerOffen' 
                         },
                         event_spec  => { 
                             type => 'string', 
@@ -1254,7 +1254,7 @@ sub Gemini_ExecuteFunctionCall {
         my $room = Gemini_GetAutomationRoom($hash);
 
         # AT-Device anlegen
-        my $defineCmd = "$deviceName at $timeSpec $command";
+        my $defineCmd = "at_$name $deviceName at $timeSpec $command";
         my $defineResult = CommandDefine(undef, $defineCmd);
         
         if ($defineResult) {
@@ -1323,7 +1323,7 @@ sub Gemini_ExecuteFunctionCall {
         }
 
         # NOTIFY-Device anlegen
-        my $defineCmd = "$deviceName notify $eventSpec $finalCommand";
+        my $defineCmd = "n_$name $deviceName notify $eventSpec $finalCommand";
         my $defineResult = CommandDefine(undef, $defineCmd);
         
         if ($defineResult) {
