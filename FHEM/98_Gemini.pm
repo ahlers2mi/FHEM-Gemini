@@ -1236,7 +1236,8 @@ sub Gemini_ExecuteFunctionCall {
             return $errMsg;
         }
         
-        $deviceName = "at_" . $name . "_" . main::getUniqueId() . "_" . $deviceName;
+        my $uniqueID = sprintf("%x%x%x", time(), rand(0xffff), rand(0xffff));
+        $deviceName = "at_" . $name . "_" . $uniqueID . "_" . $deviceName;
         
         # Prüfen ob Device bereits existiert
         if (exists $main::defs{$deviceName}) {
@@ -1301,7 +1302,8 @@ sub Gemini_ExecuteFunctionCall {
             return $errMsg;
         }
 
-        $deviceName = "n_" . $name . "_" . main::getUniqueId() . "_" . $deviceName;
+        my $uniqueID = sprintf("%x%x%x", time(), rand(0xffff), rand(0xffff));
+        $deviceName = "n_" . $name . "_" . $uniqueID . "_" . $deviceName;
 
         # Prüfen ob Device bereits existiert
         if (exists $main::defs{$deviceName}) {
