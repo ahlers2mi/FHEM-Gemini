@@ -859,7 +859,7 @@ sub Gemini_GetControlTools {
                 }
             },
             {
-                name        => 'create_device',
+                name        => 'create_at_device',
                 description => 'Legt ein zeitgesteuertes AT-Device in FHEM an. Für einmalige Aktionen (wird automatisch gelöscht) oder wiederkehrende Zeitpläne (bleibt bestehen). Zeitformat: HH:MM:SS oder +HH:MM:SS (relativ). Für wiederkehrende Aktionen: *HH:MM:SS',
                 parameters  => {
                     type       => 'object',
