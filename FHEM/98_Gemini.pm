@@ -874,7 +874,7 @@ sub Gemini_GetControlTools {
                         },
                         command     => { 
                             type => 'string', 
-                            description => 'Der set-Befehl, Syntax: "set Wetterstation wind_speed 15", "set Lampe1 on", "set Rollade5 pct 0", "set Neonroehre off"' 
+                            description => 'Der set-Befehl, keine Verkettung von Befehlen, du kannst mehrere create_at_device übertragen, Syntax: "set Wetterstation wind_speed 15", "set Lampe1 on", "set Rollade5 pct 0", "set Neonroehre off"' 
                         },
                         recurring   => { 
                             type => 'boolean', 
@@ -900,7 +900,7 @@ sub Gemini_GetControlTools {
                         },
                         command     => { 
                             type => 'string', 
-                            description => 'Der set-Befehl, Syntax: "set Wetterstation wind_speed 15", "set Lampe1 on", "set Rollade5 pct 0", "set Neonroehre off"' 
+                            description => 'Der set-Befehl, keine Verkettung von Befehlen, du kannst mehrere create_notify_device übertragen, Syntax: "set Wetterstation wind_speed 15", "set Lampe1 on", "set Rollade5 pct 0", "set Neonroehre off"' 
                         },
                         one_shot    => { 
                             type => 'boolean', 
