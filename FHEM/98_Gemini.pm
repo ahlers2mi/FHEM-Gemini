@@ -1254,7 +1254,8 @@ sub Gemini_ExecuteFunctionCall {
         my $room = Gemini_GetAutomationRoom($hash);
 
         # AT-Device anlegen
-        my $defineCmd = "at_$name $deviceName at $timeSpec $command";
+        $deviceName = "at_$name_$deviceName";
+        my $defineCmd = "$name $deviceName at $timeSpec $command";
         my $defineResult = CommandDefine(undef, $defineCmd);
         
         if ($defineResult) {
@@ -1323,7 +1324,8 @@ sub Gemini_ExecuteFunctionCall {
         }
 
         # NOTIFY-Device anlegen
-        my $defineCmd = "n_$name $deviceName notify $eventSpec $finalCommand";
+        $deviceName = "n_$name_$deviceName";
+        my $defineCmd = "$deviceName notify $eventSpec $finalCommand";
         my $defineResult = CommandDefine(undef, $defineCmd);
         
         if ($defineResult) {
