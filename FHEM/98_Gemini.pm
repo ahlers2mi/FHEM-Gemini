@@ -1235,7 +1235,9 @@ sub Gemini_ExecuteFunctionCall {
             Log3 $name, 2, "Gemini ($name): $errMsg";
             return $errMsg;
         }
-
+        
+        $deviceName = "at_" . $name . "_" . $deviceName;
+        
         # Prüfen ob Device bereits existiert
         if (exists $main::defs{$deviceName}) {
             my $errMsg = "Fehler: Gerät '$deviceName' existiert bereits";
@@ -1253,8 +1255,7 @@ sub Gemini_ExecuteFunctionCall {
         # Raum ermitteln
         my $room = Gemini_GetAutomationRoom($hash);
 
-        # AT-Device anlegen        
-        $deviceName = "at_" . $name . "_" . $deviceName;
+        # AT-Device anlegen                
         my $defineCmd = "$deviceName at $timeSpec $command";
         my $defineResult = CommandDefine(undef, $defineCmd);
         
@@ -1300,6 +1301,8 @@ sub Gemini_ExecuteFunctionCall {
             return $errMsg;
         }
 
+        $deviceName = "n_" . $name . "_" . $deviceName;
+
         # Prüfen ob Device bereits existiert
         if (exists $main::defs{$deviceName}) {
             my $errMsg = "Fehler: Gerät '$deviceName' existiert bereits";
@@ -1323,8 +1326,7 @@ sub Gemini_ExecuteFunctionCall {
             $finalCommand = "{ fhem('$command');; fhem('delete $deviceName') }";
         }
 
-        # NOTIFY-Device anlegen        
-        $deviceName = "n_" . $name . "_" . $deviceName;
+        # NOTIFY-Device anlegen                
         my $defineCmd = "$deviceName notify $eventSpec $finalCommand";
         my $defineResult = CommandDefine(undef, $defineCmd);
         
