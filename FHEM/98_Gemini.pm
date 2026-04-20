@@ -874,7 +874,7 @@ sub Gemini_GetControlTools {
                         },
                         command     => { 
                             type => 'string', 
-                            description => 'Der set-Befehl, keine Verkettung von Befehlen, du kannst mehrere create_at_device aufrufen, Syntax: "set <GERÄT> wind_speed 15", "set <GERÄT> on", "set <GERÄT> pct 0", "set <GERÄT> off"' 
+                            description => 'Der set-Befehl, keine Verkettung von Befehlen, du kannst mehrere create_at_device aufrufen, Wichtig: Verwende ausschließlich den exakten FHEM-Gerätenamen (den Namen, der in der FHEM-Geräteliste steht), niemals den Alias oder einen geschätzten Namen. Syntax: set <GERÄTENAME> <PARAMETER> <WERT> bzw. set <GERÄTENAME> <WERT>'
                         },
                         recurring   => { 
                             type => 'boolean', 
@@ -900,7 +900,7 @@ sub Gemini_GetControlTools {
                         },
                         command     => { 
                             type => 'string', 
-                            description => 'Der set-Befehl, keine Verkettung von Befehlen, du kannst mehrere create_notify_device aufrufen, Syntax: "set <GERÄT> wind_speed 15", "set <GERÄT> on", "set <GERÄT> pct 0", "set <GERÄT> off"'  
+                            description => 'Der set-Befehl, keine Verkettung von Befehlen, du kannst mehrere create_notify_device aufrufen, Wichtig: Verwende ausschließlich den exakten FHEM-Gerätenamen (den Namen, der in der FHEM-Geräteliste steht), niemals den Alias oder einen geschätzten Namen. Syntax: set <GERÄTENAME> <PARAMETER> <WERT> bzw. set <GERÄTENAME> <WERT>'  
                         },
                         one_shot    => { 
                             type => 'boolean', 
