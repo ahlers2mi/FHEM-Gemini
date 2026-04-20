@@ -1255,7 +1255,7 @@ sub Gemini_ExecuteFunctionCall {
 
         # AT-Device anlegen        
         $deviceName = "at_" . $name . "_" . $deviceName;
-        my $defineCmd = "$name $deviceName at $timeSpec $command";
+        my $defineCmd = "$deviceName at $timeSpec $command";
         my $defineResult = CommandDefine(undef, $defineCmd);
         
         if ($defineResult) {
