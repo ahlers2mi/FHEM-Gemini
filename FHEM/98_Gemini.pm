@@ -1253,8 +1253,8 @@ sub Gemini_ExecuteFunctionCall {
         # Raum ermitteln
         my $room = Gemini_GetAutomationRoom($hash);
 
-        # AT-Device anlegen
-        $deviceName = "at_$name_$deviceName";
+        # AT-Device anlegen        
+        $deviceName = "at_" . $name . "_" . $deviceName";
         my $defineCmd = "$name $deviceName at $timeSpec $command";
         my $defineResult = CommandDefine(undef, $defineCmd);
         
@@ -1323,8 +1323,8 @@ sub Gemini_ExecuteFunctionCall {
             $finalCommand = "{ fhem('$command');; fhem('delete $deviceName') }";
         }
 
-        # NOTIFY-Device anlegen
-        $deviceName = "n_$name_$deviceName";
+        # NOTIFY-Device anlegen        
+        $deviceName = "n_" . $name . "_" . $deviceName";
         my $defineCmd = "$deviceName notify $eventSpec $finalCommand";
         my $defineResult = CommandDefine(undef, $defineCmd);
         
