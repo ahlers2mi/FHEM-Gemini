@@ -859,14 +859,14 @@ sub Gemini_GetControlTools {
                 }
             },
             {
-                name        => 'create_at_device',
+                name        => 'create_device',
                 description => 'Legt ein zeitgesteuertes AT-Device in FHEM an. Für einmalige Aktionen (wird automatisch gelöscht) oder wiederkehrende Zeitpläne (bleibt bestehen). Zeitformat: HH:MM:SS oder +HH:MM:SS (relativ). Für wiederkehrende Aktionen: *HH:MM:SS',
                 parameters  => {
                     type       => 'object',
                     properties => {
                         device_name => { 
                             type => 'string', 
-                            description => 'Name des neuen AT-Geräts, z.B. at_LichtAus_2145' 
+                            description => 'Name des neuen AT-Geräts, z.B. at_Gemini_LichtAus_2145' 
                         },
                         time_spec   => { 
                             type => 'string', 
@@ -892,7 +892,7 @@ sub Gemini_GetControlTools {
                     properties => {
                         device_name => { 
                             type => 'string', 
-                            description => 'Name des neuen NOTIFY-Geräts, z.B. notify_TuerOffen' 
+                            description => 'Name des neuen NOTIFY-Geräts, z.B. n_Gemini_TuerOffen' 
                         },
                         event_spec  => { 
                             type => 'string', 
@@ -1259,6 +1259,7 @@ sub Gemini_ExecuteFunctionCall {
         
         if ($defineResult) {
             my $errMsg = "Fehler beim Anlegen von AT-Device: $defineResult";
+            Log3 $name, 2, "Gemini ($name): AT $defineCmd";
             Log3 $name, 2, "Gemini ($name): $errMsg";
             return $errMsg;
         }
@@ -1327,6 +1328,7 @@ sub Gemini_ExecuteFunctionCall {
         
         if ($defineResult) {
             my $errMsg = "Fehler beim Anlegen von NOTIFY-Device: $defineResult";
+            Log3 $name, 2, "Gemini ($name): NOTIFY $defineCmd";
             Log3 $name, 2, "Gemini ($name): $errMsg";
             return $errMsg;
         }
