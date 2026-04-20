@@ -874,7 +874,7 @@ sub Gemini_GetControlTools {
                         },
                         command     => { 
                             type => 'string', 
-                            description => 'FHEM-Befehl der ausgeführt werden soll, z.B. "set Lampe1 off"' 
+                            description => 'Der set-Befehl, z.B. on, off, 21'
                         },
                         recurring   => { 
                             type => 'boolean', 
@@ -900,7 +900,7 @@ sub Gemini_GetControlTools {
                         },
                         command     => { 
                             type => 'string', 
-                            description => 'FHEM-Befehl der bei Event ausgeführt werden soll, z.B. "set Alarm on"' 
+                            description => 'Der set-Befehl, z.B. on, off, 21' 
                         },
                         one_shot    => { 
                             type => 'boolean', 
