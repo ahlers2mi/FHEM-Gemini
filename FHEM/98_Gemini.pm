@@ -874,7 +874,7 @@ sub Gemini_GetControlTools {
                         },
                         command     => { 
                             type => 'string', 
-                            description => 'Der set-Befehl, z.B. on, off, 21'
+                            description => 'Der set-Befehl, Syntax: "set Wetterstation wind_speed 15", "set Lampe1 on", "set Rollade5 pct 0", "set Neonroehre off"' 
                         },
                         recurring   => { 
                             type => 'boolean', 
@@ -900,7 +900,7 @@ sub Gemini_GetControlTools {
                         },
                         command     => { 
                             type => 'string', 
-                            description => 'Der set-Befehl, z.B. on, off, 21' 
+                            description => 'Der set-Befehl, Syntax: "set Wetterstation wind_speed 15", "set Lampe1 on", "set Rollade5 pct 0", "set Neonroehre off"' 
                         },
                         one_shot    => { 
                             type => 'boolean', 
@@ -1236,7 +1236,7 @@ sub Gemini_ExecuteFunctionCall {
             return $errMsg;
         }
         
-        $deviceName = "at_" . $name . "_" . $deviceName;
+        $deviceName = "at_" . $name . "_" . main::getUniqueId() . "_" . $deviceName;
         
         # Prüfen ob Device bereits existiert
         if (exists $main::defs{$deviceName}) {
@@ -1301,7 +1301,7 @@ sub Gemini_ExecuteFunctionCall {
             return $errMsg;
         }
 
-        $deviceName = "n_" . $name . "_" . $deviceName;
+        $deviceName = "n_" . $name . "_" . main::getUniqueId() . "_" . $deviceName;
 
         # Prüfen ob Device bereits existiert
         if (exists $main::defs{$deviceName}) {
