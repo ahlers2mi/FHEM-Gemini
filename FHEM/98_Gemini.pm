@@ -866,7 +866,7 @@ sub Gemini_GetControlTools {
                     properties => {
                         device_name => { 
                             type => 'string', 
-                            description => 'Name des neuen AT-Geräts, z.B. LichtAus_2145' 
+                            description => 'Name des neuen AT-Geräts, z.B. LichtAus_2145, LichtAn_5Min' 
                         },
                         time_spec   => { 
                             type => 'string', 
@@ -874,7 +874,7 @@ sub Gemini_GetControlTools {
                         },
                         command     => { 
                             type => 'string', 
-                            description => 'Der set-Befehl, keine Verkettung von Befehlen, du kannst mehrere create_at_device anlegen, Syntax: "set <GERÄT> wind_speed 15", "set <GERÄT> on", "set <GERÄT> pct 0", "set <GERÄT> off"' 
+                            description => 'Der set-Befehl, keine Verkettung von Befehlen, du kannst mehrere create_at_device aufrufen, Syntax: "set <GERÄT> wind_speed 15", "set <GERÄT> on", "set <GERÄT> pct 0", "set <GERÄT> off"' 
                         },
                         recurring   => { 
                             type => 'boolean', 
@@ -892,7 +892,7 @@ sub Gemini_GetControlTools {
                     properties => {
                         device_name => { 
                             type => 'string', 
-                            description => 'Name des neuen NOTIFY-Geräts, z.B. TuerOffen' 
+                            description => 'Name des neuen NOTIFY-Geräts, z.B. TuerOffen, BewegungEsszimmerLicht' 
                         },
                         event_spec  => { 
                             type => 'string', 
@@ -900,7 +900,7 @@ sub Gemini_GetControlTools {
                         },
                         command     => { 
                             type => 'string', 
-                            description => 'Der set-Befehl, keine Verkettung von Befehlen, du kannst mehrere create_notify_device anlegen, Syntax: "set <GERÄT> wind_speed 15", "set <GERÄT> on", "set <GERÄT> pct 0", "set <GERÄT> off"'  
+                            description => 'Der set-Befehl, keine Verkettung von Befehlen, du kannst mehrere create_notify_device aufrufen, Syntax: "set <GERÄT> wind_speed 15", "set <GERÄT> on", "set <GERÄT> pct 0", "set <GERÄT> off"'  
                         },
                         one_shot    => { 
                             type => 'boolean', 
