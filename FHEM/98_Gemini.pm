@@ -55,6 +55,8 @@
 ##############################################################################
 
 # Versionshistorie:
+# 4.0.1 - 2026-04-21  Neu: Attribut safetySettings zur Steuerung der Inhaltsfilterung (Vermeidung von False-Positives bei der Bildanalyse)
+#                          - safetySettings
 # 4.0.1 - 2026-04-20  Neu: AT/NOTIFY Support via Function Calling
 #                          - create_at_device für zeitgesteuerte Aktionen
 #                          - create_notify_device für eventbasierte Aktionen
