@@ -255,7 +255,7 @@ get GeminiAI chatHistory
 | `apiKey` | Google Gemini API Key **(Pflicht)** | – |
 | `model` | Gemini-Modell | `gemini-3.1-flash-lite-preview` |
 | `maxHistory` | Maximale Anzahl gespeicherter Chat-Nachrichten | `20` |
-| `safetySettings` | Konfiguriert die Schwellenwerte für die Inhaltsfilterung der Google-API. Hilfreich, wenn harmlose Anfragen (z.B. Personen auf Kamerabildern) blockiert werden. (BLOCK_NONE, BLOCK_ONLY_HIGH, BLOCK_MEDIUM_AND_ABOVE) | `BLOCK_ONLY_HIGH` |
+| `safetySettings` | Konfiguriert die Schwellenwerte für die Inhaltsfilterung der Google-API. Hilfreich, wenn harmlose Anfragen (z.B. Personen auf Kamerabildern) blockiert werden. (`BLOCK_NONE`, `BLOCK_ONLY_HIGH`, `BLOCK_MEDIUM_AND_ABOVE`) | `BLOCK_ONLY_HIGH` |
 | `systemPrompt` | Optionaler System-Prompt (Rolle/Verhalten von Gemini) | – |
 | `timeout` | HTTP-Timeout in Sekunden | `30` |
 | `disable` | Modul deaktivieren (`0`/`1`) | `0` |
