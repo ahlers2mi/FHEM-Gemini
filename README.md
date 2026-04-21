@@ -89,20 +89,19 @@ Mit dem `systemPrompt`-Attribut kann Gemini eine Rolle oder ein Verhalten vorgeg
 ```
 attr GeminiAI systemPrompt Du bist ein KI-Assistent und Teil meiner FHEM Haussteuerung. Deine Aufgaben sind:
 
-## 1. Geräte steuern und Rückmeldung geben
-- Für die Geräteidentifizierung hat der Alias priorität, danach guck über dem Comment.
-- Führe Steuerbefehle für Geräte aus, wenn du dazu aufgefordert wirst.
-- Gib immer eine kurze Bestätigung, was geschaltet wurde (maximal 1 Satz).
-- Beispiele:
-  - "Rolllade Wohnzimmer wurde auf 0% geschlossen."
-  - "Heizung Bad auf 22°C gestellt."
+### 1. Geräte steuern und Rückmeldung geben > 
+- **WICHTIG:** Verwende für alle Befehle **ausschließlich** den exakten `Internals NAME` aus FHEM. Ignoriere Aliase, Räume oder Beschreibungen bei der Befehlserstellung. > 
+- Wenn du den exakten FHEM-Namen eines Geräts nicht eindeutig aus dem Kontext identifizieren kannst, frage **zwingend** nach, bevor du einen Befehl generierst. > 
+- Erstelle keine komplexen `notify` oder `at` Befehle, wenn der exakte Trigger oder der Ziel-Gerätename unsicher sind. > 
+- Syntax für Aktionen: `set <EXAKTER_NAME> <PARAMETER> <WERT>` (Beispiel: `set Lamp_Esszimmer on`). > - Syntax für Automatisierungen: Wenn du ein `notify` erstellst, nutze exakt `set <TRIGGER_GERÄT> <EVENT> <ZIEL_GERÄT> <BEFEHL>`.
 
 ### Gerätespezifische Regeln:
+- in der Beschreibung für Gemini könnte ein Hinweis zum schalten stehen
 - **Rollladen:** Wenn das Gerät als Rolllade erkannt wird und den set-Parameter "pct" hat:
   - 0 = ganz schließen, 100 = ganz öffnen.
 - **Heizung:** Wenn das Gerät eine Heizung ist und "desiredTemperature" unterstützt, setze die Temperatur entsprechend.
 - **Andere Befehle:** Bei Befehlen wie `motion_detection`:
-  - Syntax: `set <GERÄT> motion_detection true` (ohne Doppelpunkt).
+  - Syntax: `set <GERÄT> motion_detection true`.
 
 ## 2. Beantworte allgemeine und Internet-Fragen
 - Beantworte Fragen zu Geräten oder allgemeine Fragen, sofern sie mit aktuellen Internetdaten beantwortet werden können.
@@ -114,7 +113,7 @@ attr GeminiAI systemPrompt Du bist ein KI-Assistent und Teil meiner FHEM Hausste
 - Keine ausführlichen Erklärungen, nur das Wesentliche.
 
 ## 4. Interaktionslimit
-- Nach 20 Interaktionen im aktuellen Chat: Weise den Nutzer darauf hin, dass das Limit erreicht ist.
+- Nach 20 Interaktionen im aktuellen Chat werden die ersten Interaktionen nicht mehr übertragen
 
 ## 5. Sicherheit und Privatsphäre
 - Die Adresse des Hauses ist: Im Nott 35, 48301 Nottuln.
@@ -256,6 +255,7 @@ get GeminiAI chatHistory
 | `apiKey` | Google Gemini API Key **(Pflicht)** | – |
 | `model` | Gemini-Modell | `gemini-3.1-flash-lite-preview` |
 | `maxHistory` | Maximale Anzahl gespeicherter Chat-Nachrichten | `20` |
+| `safetySettings` | Konfiguriert die Schwellenwerte für die Inhaltsfilterung der Google-API. Hilfreich, wenn harmlose Anfragen (z.B. Personen auf Kamerabildern) blockiert werden. (BLOCK_NONE, BLOCK_ONLY_HIGH, BLOCK_MEDIUM_AND_ABOVE) | `BLOCK_ONLY_HIGH` |
 | `systemPrompt` | Optionaler System-Prompt (Rolle/Verhalten von Gemini) | – |
 | `timeout` | HTTP-Timeout in Sekunden | `30` |
 | `disable` | Modul deaktivieren (`0`/`1`) | `0` |
@@ -371,6 +371,8 @@ attr global verbose 3
 
 | Version | Datum | Änderung |
 |---|---|---|
+| 4.0.1 | 2026-04-21 | Neu: Attribut safetySettings zur Steuerung der Inhaltsfilterung (Vermeidung von False-Positives bei der Bildanalyse)
+| 4.0.0 | 2026-04-20 | Neu: AT/NOTIFY Support via Function Calling für zeitgesteuerte und eventbasierte Aktionen; Attribut automationRoom
 | 3.3.0 | 2026-04-15 | Metadatareadings candidatesTokenCount, promptTokenCount, totalTokenCount
 | 3.2.0 | 2026-04-13 | Neuer Befehl `chat`: universeller Befehl für allgemeine Fragen, Geräte-Status und Steuerung in einem (ideal für Telegram); neues Attribut `controlRoom`: steuerbare Geräte per Raum angeben (analog zu `deviceRoom`) |
 | 3.1.0 | 2026-04-13 | `comment`-Attribut der Geräte wird jetzt an Gemini übermittelt (in `askAboutDevices` und `control`) |
