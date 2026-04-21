@@ -55,7 +55,7 @@
 ##############################################################################
 
 # Versionshistorie:
-# 4.0.0 - 2026-04-20  Neu: AT/NOTIFY Support via Function Calling
+# 4.0.1 - 2026-04-20  Neu: AT/NOTIFY Support via Function Calling
 #                          - create_at_device für zeitgesteuerte Aktionen
 #                          - create_notify_device für eventbasierte Aktionen
 #                          - Attribut automationRoom für Raum-Zuordnung, safetySettings
@@ -152,6 +152,7 @@ sub Gemini_Initialize {
         'controlRoom:textField-long ' .
         'deviceRoom:textField-long ' .
         'automationRoom ' .
+        'safetySettings:BLOCK_NONE,BLOCK_ONLY_HIGH,BLOCK_MEDIUM_AND_ABOVE ' .
         'systemPrompt:textField-long ' .
         'readingBlacklist:textField-long ' .
         $readingFnAttributes;
@@ -171,7 +172,7 @@ sub Gemini_Define {
     my $name = $args[0];
     $hash->{NAME}        = $name;
     $hash->{CHAT}        = [];   # Chat-Verlauf als Array-Referenz
-    $hash->{VERSION}     = '4.0.0';
+    $hash->{VERSION}     = '4.0.1';
 
     readingsSingleUpdate($hash, 'state',             'initialized', 1);
     readingsSingleUpdate($hash, 'response',          '-',           0);
