@@ -30,6 +30,7 @@
 #                      uebermittelt werden; Wildcards (*) werden unterstuetzt.
 #                      Standard: attrTemplate associate R-* RegL_* associatedWith peerListRDate
 #                                protLastRcv lastTimeSync lastcmd Heap LoadAvg Uptime Wifi_*
+#   safetySettings  - :BLOCK_NONE,BLOCK_ONLY_HIGH,BLOCK_MEDIUM_AND_ABOVE ' 
 #
 # Set-Befehle:
 #   ask <Frage>                    - Textfrage stellen
@@ -57,7 +58,7 @@
 # 4.0.0 - 2026-04-20  Neu: AT/NOTIFY Support via Function Calling
 #                          - create_at_device für zeitgesteuerte Aktionen
 #                          - create_notify_device für eventbasierte Aktionen
-#                          - Attribut automationRoom für Raum-Zuordnung
+#                          - Attribut automationRoom für Raum-Zuordnung, safetySettings
 #                          - Auto-Cleanup für einmalige NOTIFY-Devices
 #                          - Reading lastAutomation
 # 3.4.0 - 2026-04-16  Neu: Eigenes Globalses Attribut geminiComment für Steuerinfos an Gemini
@@ -300,9 +301,10 @@ sub Gemini_SendRequest {
         return;
     }
 
-    my $model      = AttrVal($name, 'model',      'gemini-3.1-flash-lite-preview');
-    my $timeout    = AttrVal($name, 'timeout',    30);
-    my $maxHistory = AttrVal($name, 'maxHistory', 20);
+    my $model       = AttrVal($name, 'model',      'gemini-3.1-flash-lite-preview');
+    my $safetyLevel = AttrVal($name, 'safetySettings', 'BLOCK_ONLY_HIGH');
+    my $timeout     = AttrVal($name, 'timeout',    30);
+    my $maxHistory  = AttrVal($name, 'maxHistory', 20);
 
     my @parts;
 
@@ -358,7 +360,13 @@ sub Gemini_SendRequest {
     my $contentsToSend = $disableHistory ? [ $hash->{CHAT}[-1] ] : $hash->{CHAT};
 
     my %requestBody = (
-        contents => $contentsToSend
+        contents => $contentsToSend,
+        safetySettings => [
+            { category => "HARM_CATEGORY_HARASSMENT", threshold => $safetyLevel },
+            { category => "HARM_CATEGORY_HATE_SPEECH", threshold => $safetyLevel },
+            { category => "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold => $safetyLevel },
+            { category => "HARM_CATEGORY_DANGEROUS_CONTENT", threshold => $safetyLevel },
+        ]
     );
 
     my $systemPrompt = AttrVal($name, 'systemPrompt', '');
