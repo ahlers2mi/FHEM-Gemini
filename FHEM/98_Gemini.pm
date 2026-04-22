@@ -9,6 +9,8 @@
 #   - Chat-Verlauf (Multi-Turn) beibehalten
 #   - Chat zurücksetzen
 #   - FHEM-Geräte per Function Calling steuern
+#   - AT-Devices (zeitgesteuert) anlegen
+#   - NOTIFY-Devices (eventbasiert) anlegen mit Auto-Cleanup
 #
 # Attribute:
 #   apiKey        - Google Gemini API Key (Pflicht)
@@ -22,11 +24,13 @@
 #   controlList   - Komma-getrennte Liste der Geräte, die Gemini steuern darf
 #   controlRoom   - Komma-getrennte Raumliste; Geraete mit passendem room-Attribut
 #                   werden automatisch als steuerbar eingestuft (ergaenzt controlList)
+#   automationRoom - Raum für automatisch angelegte AT/NOTIFY-Geräte (Standard: erster Raum von Gemini selbst)
 #   disableHistory - Chat-Verlauf deaktivieren (0/1); jede Anfrage wird als eigenstaendiges Gespraech behandelt
 #   readingBlacklist - Leerzeichen-getrennte Liste von Reading-/Befehlsnamen, die nicht an Gemini
 #                      uebermittelt werden; Wildcards (*) werden unterstuetzt.
 #                      Standard: attrTemplate associate R-* RegL_* associatedWith peerListRDate
 #                                protLastRcv lastTimeSync lastcmd Heap LoadAvg Uptime Wifi_*
+#   safetySettings  - :BLOCK_NONE,BLOCK_ONLY_HIGH,BLOCK_MEDIUM_AND_ABOVE ' 
 #
 # Set-Befehle:
 #   ask <Frage>                    - Textfrage stellen
@@ -46,10 +50,19 @@
 #   chatHistory        - Anzahl der Nachrichten im Verlauf
 #   lastCommand        - Letzter ausgeführter set-Befehl
 #   lastCommandResult  - Ergebnis des letzten set-Befehls
+#   lastAutomation     - Letztes angelegtes AT/NOTIFY-Gerät
 #
 ##############################################################################
 
 # Versionshistorie:
+# 4.0.1 - 2026-04-21  Neu: Attribut safetySettings zur Steuerung der Inhaltsfilterung (Vermeidung von False-Positives bei der Bildanalyse)
+#                          - safetySettings
+# 4.0.1 - 2026-04-20  Neu: AT/NOTIFY Support via Function Calling
+#                          - create_at_device für zeitgesteuerte Aktionen
+#                          - create_notify_device für eventbasierte Aktionen
+#                          - Attribut automationRoom für Raum-Zuordnung, safetySettings
+#                          - Auto-Cleanup für einmalige NOTIFY-Devices
+#                          - Reading lastAutomation
 # 3.4.0 - 2026-04-16  Neu: Eigenes Globalses Attribut geminiComment für Steuerinfos an Gemini
 # 3.3.0 - 2026-04-15  Neu: Metadatareadings
 #                          Reading candidatesTokenCount, promptTokenCount,
@@ -121,37 +134,6 @@ use JSON;
 use MIME::Base64;
 
 
-#sub Gemini_prefix {
-#    my $hash   = shift // return;
-#    my $prefix =  shift // q{Gemini};
-#    my $old_prefix = $hash->{prefix}; #Beta-User: Marker, evtl. müssen wir uns was für Umbenennungen überlegen...
-#    my $name = $hash->{NAME};
-#
-#
-#    Log3 $name, 5, "Gemini ($name): Prefix: $prefix";
-#    Log3 $name, 5, "Gemini ($name): Oldprefix: $old_prefix" if defined $old_prefix;
-#
-#    return if defined $old_prefix && $prefix eq $old_prefix;
-#    # provide attributes "GeminiName" etc. for all devices
-#    addToAttrList("${prefix}Comment:textField-long",'Gemini');    
-#
-#    return if !$init_done || !defined $old_prefix;
-#
-#    my @devs = devspec2array(".*");
-#    my @geminis = devspec2array("TYPE=Gemini:FILTER=prefix=$old_prefix");
-#
-#    for my $detail ( qw( Comment ) ) { 
-#        for my $device (@devs) {
-#            my $aval = AttrVal($device, "${old_prefix}$detail", undef); 
-#            CommandAttr($hash, "$device ${prefix}$detail $aval") if $aval;
-#            CommandDeleteAttr($hash, "$device ${old_prefix}$detail");
-#        }
-#        delFromAttrList("${old_prefix}$detail") if @geminis < 2;
-#    }
-#
-#    return;
-#}
-
 sub Gemini_Initialize {
     my ($hash) = @_; 
 
@@ -171,6 +153,8 @@ sub Gemini_Initialize {
         'controlList:textField-long ' .
         'controlRoom:textField-long ' .
         'deviceRoom:textField-long ' .
+        'automationRoom ' .
+        'safetySettings:BLOCK_NONE,BLOCK_ONLY_HIGH,BLOCK_MEDIUM_AND_ABOVE ' .
         'systemPrompt:textField-long ' .
         'readingBlacklist:textField-long ' .
         $readingFnAttributes;
@@ -182,7 +166,6 @@ sub Gemini_Define {
     my $hash = shift;
     my $def  = shift;
     my $h    = shift;
-    #parseParams: my ($hash, $def) = @_;
     
     my @args = split('[ \t]+', $def);
 
@@ -191,7 +174,7 @@ sub Gemini_Define {
     my $name = $args[0];
     $hash->{NAME}        = $name;
     $hash->{CHAT}        = [];   # Chat-Verlauf als Array-Referenz
-    $hash->{VERSION}     = '3.4.1';
+    $hash->{VERSION}     = '4.0.1';
 
     readingsSingleUpdate($hash, 'state',             'initialized', 1);
     readingsSingleUpdate($hash, 'response',          '-',           0);
@@ -199,9 +182,8 @@ sub Gemini_Define {
     readingsSingleUpdate($hash, 'lastError',         '-',           0);
     readingsSingleUpdate($hash, 'lastCommand',       '-',           0);
     readingsSingleUpdate($hash, 'lastCommandResult', '-',           0);
+    readingsSingleUpdate($hash, 'lastAutomation',    '-',           0);
 
-#    Gemini_prefix($hash, $h->{prefix}) if !defined $hash->{prefix} || defined $h->{prefix} && $hash->{prefix} ne $h->{prefix};
-#    addToDevAttrList("global", $hash->{NAME} . "Comment:textField-long");
     addToAttrList($hash->{NAME} . "Comment:textField-long","Gemini");  
     
     Log3 $name, 3, "Gemini ($name): Defined";
@@ -322,9 +304,10 @@ sub Gemini_SendRequest {
         return;
     }
 
-    my $model      = AttrVal($name, 'model',      'gemini-3.1-flash-lite-preview');
-    my $timeout    = AttrVal($name, 'timeout',    30);
-    my $maxHistory = AttrVal($name, 'maxHistory', 20);
+    my $model       = AttrVal($name, 'model',      'gemini-3.1-flash-lite-preview');
+    my $safetyLevel = AttrVal($name, 'safetySettings', 'BLOCK_ONLY_HIGH');
+    my $timeout     = AttrVal($name, 'timeout',    30);
+    my $maxHistory  = AttrVal($name, 'maxHistory', 20);
 
     my @parts;
 
@@ -380,7 +363,13 @@ sub Gemini_SendRequest {
     my $contentsToSend = $disableHistory ? [ $hash->{CHAT}[-1] ] : $hash->{CHAT};
 
     my %requestBody = (
-        contents => $contentsToSend
+        contents => $contentsToSend,
+        safetySettings => [
+            { category => "HARM_CATEGORY_HARASSMENT", threshold => $safetyLevel },
+            { category => "HARM_CATEGORY_HATE_SPEECH", threshold => $safetyLevel },
+            { category => "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold => $safetyLevel },
+            { category => "HARM_CATEGORY_DANGEROUS_CONTENT", threshold => $safetyLevel },
+        ]
     );
 
     my $systemPrompt = AttrVal($name, 'systemPrompt', '');
@@ -665,6 +654,28 @@ sub Gemini_GlobMatch {
 }
 
 ##############################################################################
+# Hilfsfunktion: Raum für Automation-Geräte ermitteln
+##############################################################################
+sub Gemini_GetAutomationRoom {
+    my ($hash) = @_;
+    my $name = $hash->{NAME};
+    
+    # 1. Prüfe explizites Attribut automationRoom
+    my $automationRoom = AttrVal($name, 'automationRoom', '');
+    return $automationRoom if $automationRoom;
+    
+    # 2. Fallback: ersten Raum von Gemini selbst nutzen
+    my $myRooms = AttrVal($name, 'room', '');
+    if ($myRooms) {
+        my @rooms = split(/\s*,\s*/, $myRooms);
+        return $rooms[0] if @rooms;
+    }
+    
+    # 3. Kein Raum gefunden
+    return '';
+}
+
+##############################################################################
 # FHEM Device-Kontext für Gemini aufbauen
 ##############################################################################
 sub Gemini_BuildDeviceContext {
@@ -856,6 +867,58 @@ sub Gemini_GetControlTools {
                         device => { type => 'string', description => 'FHEM Gerätename (intern)' }
                     },
                     required => ['device']
+                }
+            },
+            {
+                name        => 'create_at_device',
+                description => 'Legt ein zeitgesteuertes AT-Device in FHEM an. Für einmalige Aktionen (wird automatisch gelöscht) oder wiederkehrende Zeitpläne (bleibt bestehen). Zeitformat: HH:MM:SS oder +HH:MM:SS (relativ). Für wiederkehrende Aktionen: *HH:MM:SS',
+                parameters  => {
+                    type       => 'object',
+                    properties => {
+                        device_name => { 
+                            type => 'string', 
+                            description => 'Name des neuen AT-Geräts, z.B. LichtAus_2145, LichtAn_5Min' 
+                        },
+                        time_spec   => { 
+                            type => 'string', 
+                            description => 'Zeitspezifikation: HH:MM:SS (absolut), +HH:MM:SS (relativ), *HH:MM:SS (täglich wiederkehrend), *{Wochentag}HH:MM:SS (wöchentlich)' 
+                        },
+                        command     => { 
+                            type => 'string', 
+                            description => 'Der set-Befehl, keine Verkettung von Befehlen, du kannst mehrere create_at_device aufrufen, Wichtig: Verwende ausschließlich den exakten FHEM-Gerätenamen (den Namen, der in der FHEM-Geräteliste steht), niemals den Alias oder einen geschätzten Namen. Syntax: set <GERÄTENAME> <PARAMETER> <WERT> bzw. set <GERÄTENAME> <WERT>'
+                        },
+                        recurring   => { 
+                            type => 'boolean', 
+                            description => 'true für wiederkehrende Aktionen (bleibt bestehen), false für einmalige Aktionen (wird nach Ausführung gelöscht). Standard: false' 
+                        }
+                    },
+                    required => ['device_name', 'time_spec', 'command']
+                }
+            },
+            {
+                name        => 'create_notify_device',
+                description => 'Legt ein eventbasiertes NOTIFY-Device in FHEM an, das auf Ereignisse anderer Geräte reagiert. Für einmalige Reaktionen (löscht sich automatisch) oder permanente Event-Handler (bleibt bestehen).',
+                parameters  => {
+                    type       => 'object',
+                    properties => {
+                        device_name => { 
+                            type => 'string', 
+                            description => 'Name des neuen NOTIFY-Geräts, z.B. TuerOffen, BewegungEsszimmerLicht' 
+                        },
+                        event_spec  => { 
+                            type => 'string', 
+                            description => 'Event-Spezifikation: "Gerätename:Event-Pattern", z.B. "Tuer:open" oder "Bewegung:.*" oder "Temp:temperature.*20"' 
+                        },
+                        command     => { 
+                            type => 'string', 
+                            description => 'Der set-Befehl, keine Verkettung von Befehlen, du kannst mehrere create_notify_device aufrufen, Wichtig: Verwende ausschließlich den exakten FHEM-Gerätenamen (den Namen, der in der FHEM-Geräteliste steht), niemals den Alias oder einen geschätzten Namen. Syntax: set <GERÄTENAME> <PARAMETER> <WERT> bzw. set <GERÄTENAME> <WERT>'  
+                        },
+                        one_shot    => { 
+                            type => 'boolean', 
+                            description => 'true für einmalige Reaktion (löscht sich nach Ausführung selbst), false für permanente Event-Überwachung. Standard: true' 
+                        }
+                    },
+                    required => ['device_name', 'event_spec', 'command']
                 }
             }
         ]
@@ -1171,6 +1234,140 @@ sub Gemini_ExecuteFunctionCall {
             return "Fehler: Geraet '$device' nicht gefunden";
         }
 
+    } elsif ($fcName eq 'create_at_device') {
+        my $deviceName = $args->{device_name} // '';
+        my $timeSpec   = $args->{time_spec}   // '';
+        my $command    = $args->{command}     // '';
+        my $recurring  = $args->{recurring}   // 0;
+
+        # Sicherheit: Device-Name validieren
+        if ($deviceName !~ /^[a-zA-Z0-9_\-]+$/) {
+            my $errMsg = "Fehler: Ungültiger Gerätename '$deviceName'";
+            Log3 $name, 2, "Gemini ($name): $errMsg";
+            return $errMsg;
+        }
+        
+        my $uniqueID = sprintf("%x%x%x", time(), rand(0xffff), rand(0xffff));
+        $deviceName = "at_" . $name . "_" . $uniqueID . "_" . $deviceName;
+        
+        # Prüfen ob Device bereits existiert
+        if (exists $main::defs{$deviceName}) {
+            my $errMsg = "Fehler: Gerät '$deviceName' existiert bereits";
+            Log3 $name, 2, "Gemini ($name): $errMsg";
+            return $errMsg;
+        }
+
+        # Sicherheit: Command validieren
+        if ($command =~ /[;|`\(\)<>]/) {
+            my $errMsg = "Fehler: Ungültiger Befehl '$command' (unerlaubte Zeichen)";
+            Log3 $name, 2, "Gemini ($name): $errMsg";
+            return $errMsg;
+        }
+
+        # Raum ermitteln
+        my $room = Gemini_GetAutomationRoom($hash);
+
+        # AT-Device anlegen                
+        my $defineCmd = "$deviceName at $timeSpec $command";
+        my $defineResult = CommandDefine(undef, $defineCmd);
+        
+        if ($defineResult) {
+            my $errMsg = "Fehler beim Anlegen von AT-Device: $defineResult";
+            Log3 $name, 2, "Gemini ($name): AT $defineCmd";
+            Log3 $name, 2, "Gemini ($name): $errMsg";
+            return $errMsg;
+        }
+
+        # Raum setzen wenn vorhanden
+        if ($room) {
+            CommandAttr(undef, "$deviceName room $room");
+        }
+
+        # Für einmalige AT-Devices: Selbstlöschung einbauen
+        unless ($recurring) {
+            # Erweitere den Befehl um Selbstlöschung
+            my $extendedCmd = "$command;; delete $deviceName";
+            CommandModify(undef, "$deviceName $timeSpec $extendedCmd");
+            Log3 $name, 3, "Gemini ($name): AT-Device $deviceName angelegt (einmalig, löscht sich selbst) im Raum '$room'";
+        } else {
+            Log3 $name, 3, "Gemini ($name): AT-Device $deviceName angelegt (wiederkehrend) im Raum '$room'";
+        }
+
+        # Reading aktualisieren
+        my $autoForReading = "AT: $deviceName";
+        utf8::encode($autoForReading) if utf8::is_utf8($autoForReading);
+        readingsSingleUpdate($hash, 'lastAutomation', $autoForReading, 1);
+
+        return "OK: AT-Device '$deviceName' erfolgreich angelegt" . ($room ? " im Raum '$room'" : "");
+
+    } elsif ($fcName eq 'create_notify_device') {
+        my $deviceName = $args->{device_name} // '';
+        my $eventSpec  = $args->{event_spec}  // '';
+        my $command    = $args->{command}     // '';
+        my $oneShot    = $args->{one_shot}    // 1;
+
+        # Sicherheit: Device-Name validieren
+        if ($deviceName !~ /^[a-zA-Z0-9_\-]+$/) {
+            my $errMsg = "Fehler: Ungültiger Gerätename '$deviceName'";
+            Log3 $name, 2, "Gemini ($name): $errMsg";
+            return $errMsg;
+        }
+
+        my $uniqueID = sprintf("%x%x%x", time(), rand(0xffff), rand(0xffff));
+        $deviceName = "n_" . $name . "_" . $uniqueID . "_" . $deviceName;
+
+        # Prüfen ob Device bereits existiert
+        if (exists $main::defs{$deviceName}) {
+            my $errMsg = "Fehler: Gerät '$deviceName' existiert bereits";
+            Log3 $name, 2, "Gemini ($name): $errMsg";
+            return $errMsg;
+        }
+
+        # Sicherheit: Command validieren
+        if ($command =~ /[;|`\(\)<>]/) {
+            my $errMsg = "Fehler: Ungültiger Befehl '$command' (unerlaubte Zeichen)";
+            Log3 $name, 2, "Gemini ($name): $errMsg";
+            return $errMsg;
+        }
+
+        # Raum ermitteln
+        my $room = Gemini_GetAutomationRoom($hash);
+
+        # Für one-shot NOTIFYs: Selbstlöschung in Perl-Block einbauen
+        my $finalCommand = $command;
+        if ($oneShot) {
+            $finalCommand = "{ fhem('$command');; fhem('delete $deviceName') }";
+        }
+
+        # NOTIFY-Device anlegen                
+        my $defineCmd = "$deviceName notify $eventSpec $finalCommand";
+        my $defineResult = CommandDefine(undef, $defineCmd);
+        
+        if ($defineResult) {
+            my $errMsg = "Fehler beim Anlegen von NOTIFY-Device: $defineResult";
+            Log3 $name, 2, "Gemini ($name): NOTIFY $defineCmd";
+            Log3 $name, 2, "Gemini ($name): $errMsg";
+            return $errMsg;
+        }
+
+        # Raum setzen wenn vorhanden
+        if ($room) {
+            CommandAttr(undef, "$deviceName room $room");
+        }
+
+        if ($oneShot) {
+            Log3 $name, 3, "Gemini ($name): NOTIFY-Device $deviceName angelegt (einmalig, löscht sich selbst) im Raum '$room'";
+        } else {
+            Log3 $name, 3, "Gemini ($name): NOTIFY-Device $deviceName angelegt (permanent) im Raum '$room'";
+        }
+
+        # Reading aktualisieren
+        my $autoForReading = "NOTIFY: $deviceName";
+        utf8::encode($autoForReading) if utf8::is_utf8($autoForReading);
+        readingsSingleUpdate($hash, 'lastAutomation', $autoForReading, 1);
+
+        return "OK: NOTIFY-Device '$deviceName' erfolgreich angelegt" . ($room ? " im Raum '$room'" : "");
+
     } else {
         return "Fehler: Unbekannte Funktion '$fcName'";
     }
@@ -1271,15 +1468,14 @@ sub Gemini_SendFunctionResult {
 
 =pod
 =item device
-=item summary Google Gemini AI integration for FHEM
-=item summary_DE Google Gemini KI Anbindung fuer FHEM
-a
+=item summary Google Gemini AI integration for FHEM with Automation
+=item summary_DE Google Gemini KI Anbindung fuer FHEM mit Automatisierung
 =begin html
 
 <a name="Gemini"></a>
 <h3>Gemini</h3>
 <ul>
-  FHEM Modul zur Anbindung der Google Gemini AI API.<br><br>
+  FHEM Modul zur Anbindung der Google Gemini AI API mit Automatisierungsfunktionen.<br><br>
 
   <b>Define</b><br>
   <ul><code>define &lt;name&gt; Gemini</code></ul><br>
@@ -1311,6 +1507,9 @@ a
       die <b>controlList</b>. Duplikate werden automatisch entfernt.
       Beispiel: <code>attr GeminiAI controlRoom Wohnzimmer,Kueche</code>.
       Kann zusammen mit <b>controlList</b> verwendet werden.</li>
+    <li><b>automationRoom</b> - Raum fuer automatisch angelegte AT/NOTIFY-Geraete.
+      Wenn nicht gesetzt, wird der erste Raum des Gemini-Devices selbst verwendet.
+      Beispiel: <code>attr GeminiAI automationRoom Automation</code></li>
     <li><b>readingBlacklist</b> - Leerzeichen-getrennte Liste von Reading- bzw.
       Befehlsnamen, die <b>nicht</b> an Gemini uebermittelt werden sollen.
       Wildcards mit <code>*</code> werden unterstuetzt, z.B. <code>R-*</code> oder <code>Wifi_*</code>.<br>
@@ -1329,13 +1528,17 @@ a
     <li><b>chat</b> &lt;Nachricht&gt; - Universeller Befehl fuer allgemeine Fragen, Geraete-Status
       und Steuerung in einem einzigen Befehl. Ideal fuer die Telegram-Integration.
       Wenn <b>controlList</b> oder <b>controlRoom</b> konfiguriert ist, kann Gemini sowohl
-      Geraete steuern als auch Statusfragen beantworten. Der Geraete-Status aus
-      <b>deviceList</b>/<b>deviceRoom</b> wird automatisch als Kontext mitgegeben.
+      Geraete steuern als auch Statusfragen beantworten und Automatisierungen anlegen. 
+      Der Geraete-Status aus <b>deviceList</b>/<b>deviceRoom</b> wird automatisch als Kontext mitgegeben.
       Beispiel: <code>set GeminiAI chat Ist die Wohnzimmerlampe an?</code><br>
       Beispiel: <code>set GeminiAI chat Mach bitte das Licht im Flur aus</code><br>
-      Beispiel: <code>set GeminiAI chat Was ist der Unterschied zwischen Waermepumpe und Brennwertkessel?</code></li>
+      Beispiel: <code>set GeminiAI chat Schalte das Licht morgen um 7 Uhr ein</code><br>
+      Beispiel: <code>set GeminiAI chat Benachrichtige mich wenn die Haustuer geoeffnet wird</code></li>
     <li><b>control</b> &lt;Anweisung&gt; - Gemini steuert FHEM-Geraete eigenstaendig per
-      Function Calling. Beispiel: <code>set GeminiAI control Mach die Wohnzimmerlampe an</code>.
+      Function Calling und kann auch AT/NOTIFY-Devices anlegen. 
+      Beispiel: <code>set GeminiAI control Mach die Wohnzimmerlampe an</code><br>
+      Beispiel: <code>set GeminiAI control Schalte in 5 Minuten alle Lampen aus</code><br>
+      Beispiel: <code>set GeminiAI control Wenn die Tuer aufgeht, schalte das Licht ein</code>.
       Nur Geraete aus <b>controlList</b>/<b>controlRoom</b> duerfen gesteuert werden.</li>
     <li><b>resetChat</b> - Chat-Verlauf loeschen</li>
   </ul><br>
@@ -1355,9 +1558,19 @@ a
     <li><b>chatHistory</b> - Anzahl der Nachrichten im Chat-Verlauf</li>
     <li><b>lastCommand</b> - Letzter ausgefuehrter set-Befehl (z.B. <code>Lampe1 on</code>)</li>
     <li><b>lastCommandResult</b> - Ergebnis des letzten set-Befehls (<code>ok</code> oder Fehlermeldung)</li>
+    <li><b>lastAutomation</b> - Letztes angelegtes AT/NOTIFY-Geraet</li>
     <li><b>candidatesTokenCount</b> - Anzahl der vom Modell generierten Tokens (Antwort)</li>
     <li><b>promptTokenCount</b> - Anzahl der gesendeten Tokens (deine Frage/Input)</li>
     <li><b>totalTokenCount</b> - Gesamtsumme der verbrauchten Tokens (Input + Output)</li>                      
+  </ul><br>
+
+  <b>Beispiele für Automatisierung</b><br>
+  <ul>
+    <li><code>set GeminiAI chat Schalte das Licht um 18:00 ein</code> - Legt AT-Device an</li>
+    <li><code>set GeminiAI chat In 30 Minuten soll die Heizung ausgehen</code> - Relatives AT-Device</li>
+    <li><code>set GeminiAI chat Jeden Tag um 22:00 alle Lampen ausschalten</code> - Wiederkehrendes AT</li>
+    <li><code>set GeminiAI chat Wenn die Haustuer aufgeht, schalte das Licht ein</code> - NOTIFY (einmalig)</li>
+    <li><code>set GeminiAI chat Überwache die Temperatur, wenn sie über 25 Grad geht, sende Alarm</code> - NOTIFY (permanent)</li>
   </ul>
 </ul>
 
