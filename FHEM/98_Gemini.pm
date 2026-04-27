@@ -30,6 +30,7 @@
 #                      uebermittelt werden; Wildcards (*) werden unterstuetzt.
 #                      Standard: attrTemplate associate R-* RegL_* associatedWith peerListRDate
 #                                protLastRcv lastTimeSync lastcmd Heap LoadAvg Uptime Wifi_*
+#   maxReadingsPerDevice - Maximale Anzahl Readings pro Gerät im dynamischen Status (Standard: 20)
 #   safetySettings  - BLOCK_NONE,BLOCK_ONLY_HIGH,BLOCK_MEDIUM_AND_ABOVE 
 #
 # Set-Befehle:
@@ -55,7 +56,12 @@
 ##############################################################################
 
 # Versionshistorie:
-# 4.1.0 - 2026-04-27  Neu: Optimierung Prompt Caching - Trennung von statischer
+# 4.0.3 - 2026-04-27  Neu: Ultra-kompaktes Format für statischen Context (60-70% Token-Ersparnis)
+#                          Format: name (alias) | type | R:reading1,reading2 | comment
+#                          Neues Attribut maxReadingsPerDevice (Standard: 20)
+#                          Log-Einträge wenn Readings gekürzt werden
+#                          Hinweis: Mehrfach-Befehle bereits unterstützt (Function Calling parallel)
+# 4.0.2 - 2026-04-27  Neu: Optimierung Prompt Caching - Trennung von statischer
 #                          Gerätestruktur (system_instruction, wird gecacht) und
 #                          dynamischen Werten (user message, günstiger Input).
 #                          Neue Funktionen: Gemini_BuildStaticDeviceContext,
@@ -151,6 +157,7 @@ sub Gemini_Initialize {
         'apiKey ' .
         'model ' .
         'maxHistory:5,10,20,50,100 ' .
+        'maxReadingsPerDevice ' .
         'timeout ' .
         'disable:0,1 ' .
         'disableHistory:0,1 ' .
@@ -179,7 +186,7 @@ sub Gemini_Define {
     my $name = $args[0];
     $hash->{NAME}        = $name;
     $hash->{CHAT}        = [];   # Chat-Verlauf als Array-Referenz
-    $hash->{VERSION}     = '4.1.0';
+    $hash->{VERSION}     = '4.0.3';
 
     readingsSingleUpdate($hash, 'state',             'initialized', 1);
     readingsSingleUpdate($hash, 'response',          '-',           0);
@@ -204,6 +211,9 @@ sub Gemini_Attr {
     my ($cmd, $name, $attr, $value) = @_; 
     if ($attr eq 'timeout') {
         return "timeout must be a positive number" unless ($value =~ /^\d+$/ && $value > 0);
+    }
+    if ($attr eq 'maxReadingsPerDevice') {
+        return "maxReadingsPerDevice must be a positive number" unless ($value =~ /^\d+$/ && $value > 0);
     }
     return undef;
 }
@@ -742,8 +752,8 @@ sub Gemini_GetDeviceList {
 }
 
 ##############################################################################
-# OPTIMIERT: Statischen Gerätekontext für Prompt Caching aufbauen
-# (Gerätestruktur ohne aktuelle Werte - wird gecacht in system_instruction)
+# ULTRA-KOMPAKT: Statischen Gerätekontext für Prompt Caching aufbauen
+# Format: name (alias) | type | R:reading1,reading2 | comment
 ##############################################################################
 sub Gemini_BuildStaticDeviceContext {
     my ($hash) = @_;
@@ -752,43 +762,51 @@ sub Gemini_BuildStaticDeviceContext {
     my @devices = Gemini_GetDeviceList($hash);
     return '' unless @devices;
 
-    my $context   = "Verfügbare Smart-Home Geräte (Struktur):\n\n";
     my @blacklist = Gemini_GetBlacklist($hash);
-
+    
+    my $context = "Smart-Home Geräte (Struktur):\n";
+    
     for my $devName (@devices) {
         next unless exists $main::defs{$devName};
         my $dev   = $main::defs{$devName};
-        my $alias = AttrVal($devName, 'alias', $devName);
-
-        $context .= "Gerät: $alias (intern: $devName)\n";
-        $context .= "  Typ: " . ($dev->{TYPE} // 'unbekannt') . "\n";
-
-        # Nur verfügbare Readings OHNE aktuelle Werte auflisten
+        my $alias = AttrVal($devName, 'alias', '');
+        my $type  = $dev->{TYPE} // '?';
+        
+        # Kompakte Zeile: name (alias) | type | R:readings | comment
+        $context .= $devName;
+        $context .= " ($alias)" if $alias && $alias ne $devName;
+        $context .= "|$type";
+        
+        # Readings kompakt (nur Namen, keine Werte)
         if (exists $dev->{READINGS}) {
             my @readings = grep { 
                 $_ ne 'state' && !Gemini_IsBlacklisted($_, @blacklist) 
             } sort keys %{$dev->{READINGS}};
             
-            if (@readings) {
-                $context .= "  Verfügbare Readings: " . join(', ', @readings) . "\n";
-            }
+            $context .= "|R:" . join(',', @readings) if @readings;
         }
-
-        # Statische Attribute
-        for my $attrName ('room', 'group', 'alias', 'comment', $hash->{NAME} . "Comment") {
-            my $attrVal = AttrVal($devName, $attrName, '');
-            $context .= "  $attrName: $attrVal\n" if $attrVal;
+        
+        # GeminiComment hat Vorrang vor normalem comment
+        my $geminiComment = AttrVal($devName, $name . 'Comment', '');
+        my $comment       = AttrVal($devName, 'comment', '');
+        
+        if ($geminiComment) {
+            $context .= "|$geminiComment";
+        } elsif ($comment) {
+            $context .= "|$comment";
         }
-
+        
         $context .= "\n";
     }
-
+    
+    $context .= "\nNutze get_device_state(device) für Details.\n";
+    
     return $context;
 }
 
 ##############################################################################
-# OPTIMIERT: Dynamischen Gerätestatus für User-Message aufbauen
-# (Aktuelle Werte - günstiger Input, nicht gecacht)
+# ULTRA-KOMPAKT: Dynamischen Gerätestatus für User-Message
+# Format: alias: state (reading=val, ...)
 ##############################################################################
 sub Gemini_BuildDynamicDeviceStatus {
     my ($hash) = @_;
@@ -797,27 +815,50 @@ sub Gemini_BuildDynamicDeviceStatus {
     my @devices = Gemini_GetDeviceList($hash);
     return '' unless @devices;
 
-    my $status    = "Aktueller Gerätestatus:\n\n";
-    my @blacklist = Gemini_GetBlacklist($hash);
-
+    my @blacklist    = Gemini_GetBlacklist($hash);
+    my $maxReadings  = AttrVal($name, 'maxReadingsPerDevice', 20);
+    
+    my $status = "Status:\n";
+    
     for my $devName (@devices) {
         next unless exists $main::defs{$devName};
         my $dev   = $main::defs{$devName};
         my $alias = AttrVal($devName, 'alias', $devName);
-        my $state = ReadingsVal($devName, 'state', 'unbekannt');
+        my $state = ReadingsVal($devName, 'state', '?');
         
-        $status .= "$alias: $state";
-
-        # Nur wichtigste Readings mit aktuellen Werten (kompakt)
+        # Kompakte Zeile: alias: state (reading=val, ...)
+        $status .= "$alias:$state";
+        
+        # Readings mit Limit
         if (exists $dev->{READINGS}) {
             my @values;
+            my $totalReadings = 0;
+            my $truncated = 0;
+            
             for my $reading (sort keys %{$dev->{READINGS}}) {
                 next if $reading eq 'state';
                 next if Gemini_IsBlacklisted($reading, @blacklist);
-                my $val = $dev->{READINGS}{$reading}{VAL} // '';
-                push @values, "$reading=$val";
+                
+                $totalReadings++;
+                
+                if (scalar(@values) < $maxReadings) {
+                    my $val = $dev->{READINGS}{$reading}{VAL} // '';
+                    push @values, "$reading=$val";
+                } else {
+                    $truncated = 1;
+                }
             }
-            $status .= " (" . join(', ', @values) . ")" if @values;
+            
+            if (@values) {
+                $status .= "(" . join(',', @values);
+                $status .= "...+" . ($totalReadings - $maxReadings) if $truncated;
+                $status .= ")";
+                
+                # Log wenn gekürzt
+                if ($truncated) {
+                    Log3 $name, 4, "Gemini ($name): $devName Readings gekürzt ($totalReadings -> $maxReadings)";
+                }
+            }
         }
         $status .= "\n";
     }
@@ -868,8 +909,8 @@ sub Gemini_GetControlDevices {
 }
 
 ##############################################################################
-# OPTIMIERT: Statischen Control-Kontext für Prompt Caching aufbauen
-# (Gerätestruktur mit set-Befehlen, ohne aktuelle Werte - wird gecacht)
+# ULTRA-KOMPAKT: Statischen Control-Kontext für Prompt Caching
+# Format: name (alias) | cmds | comment
 ##############################################################################
 sub Gemini_BuildStaticControlContext {
     my ($hash) = @_;
@@ -879,16 +920,15 @@ sub Gemini_BuildStaticControlContext {
     return '' unless @devices;
 
     my @blacklist = Gemini_GetBlacklist($hash);
-
-    my $context = "Verfügbare Geräte zum Steuern:\n\n";
+    
+    my $context = "Steuerbare Geräte:\n";
+    
     for my $devName (@devices) {
         next unless exists $main::defs{$devName};
         my $alias = AttrVal($devName, 'alias', $devName);
 
-        # Set-Befehle ermitteln (getAllSets liefert auch dynamisch berechnete Befehle)
+        # Set-Befehle ermitteln
         my $setListRaw = main::getAllSets($devName) // '';
-
-        # Typ-Informationen (z.B. :slider,0,1,100) behalten, nur Blacklist-Eintraege filtern
         my @cmds;
         for my $entry (split(/\s+/, $setListRaw)) {
             my ($cmdName) = split(/:/, $entry, 2);
@@ -897,14 +937,18 @@ sub Gemini_BuildStaticControlContext {
             push @cmds, $entry;
         }
 
-        my $cmdsStr       = @cmds ? join(', ', @cmds) : 'unbekannt';
-        my $comment       = AttrVal($devName, 'comment', '');
-        my $geminiComment = AttrVal($devName, $name . 'Comment', '');
+        my $cmdsStr = @cmds ? join(',', @cmds) : '?';
         
-        $context .= "Gerät: $alias (intern: $devName)\n";
-        $context .= "  Allgemeine Beschreibung: $comment\n" if $comment;
-        $context .= "  Beschreibung für Gemini: $geminiComment\n" if $geminiComment;
-        $context .= "  Set-Befehle: $cmdsStr\n\n";
+        # Kompakte Zeile: name (alias) | cmds | comment
+        $context .= $devName;
+        $context .= " ($alias)" if $alias ne $devName;
+        $context .= "|$cmdsStr";
+        
+        # Nur GeminiComment (wichtiger als normaler comment)
+        my $geminiComment = AttrVal($devName, $name . 'Comment', '');
+        $context .= "|$geminiComment" if $geminiComment;
+        
+        $context .= "\n";
     }
 
     return $context;
@@ -918,7 +962,7 @@ sub Gemini_GetControlTools {
         function_declarations => [
             {
                 name        => 'set_device',
-                description => 'Führt einen FHEM set-Befehl auf einem Gerät aus, z.B. on, off oder einen numerischen Wert. Kann parallel mehrfach aufgerufen werden, um mehrere Geräte gleichzeitig zu schalten.',
+                description => 'Führt einen FHEM set-Befehl auf einem Gerät aus, z.B. on, off oder einen numerischen Wert. Kann PARALLEL mehrfach aufgerufen werden, um mehrere Geräte GLEICHZEITIG zu schalten (z.B. alle Rolläden hoch: mehrere set_device Calls parallel).',
                 parameters  => {
                     type       => 'object',
                     properties => {
@@ -1199,6 +1243,13 @@ sub Gemini_HandleControlResponse {
     if (@fcResults) {
         # Gesamtes content-Objekt der Modell-Antwort einmalig speichern (Fix 2.0.2)
         push @{$hash->{CHAT}}, $content;
+        
+        # Log für parallele Befehle
+        if (scalar(@fcResults) > 1) {
+            my @names = map { $_->{name} } @fcResults;
+            Log3 $name, 3, "Gemini ($name): Mehrere Befehle parallel: " . join(', ', @names);
+        }
+        
         Gemini_SendFunctionResults($hash, \@fcResults);
         return;
     }
@@ -1579,6 +1630,8 @@ sub Gemini_SendFunctionResult {
     <li><b>apiKey</b> - Google Gemini API Key (Pflicht)</li>
     <li><b>model</b> - Gemini Modell (Standard: gemini-3.1-flash-lite-preview)</li>
     <li><b>maxHistory</b> - Max. Chat-Nachrichten (Standard: 20)</li>
+    <li><b>maxReadingsPerDevice</b> - Max. Anzahl Readings pro Gerät im dynamischen Status (Standard: 20).
+      Bei Überschreitung wird im Log (Level 4) protokolliert.</li>
     <li><b>systemPrompt</b> - Optionaler System-Prompt</li>
     <li><b>timeout</b> - HTTP Timeout in Sekunden (Standard: 30)</li>
     <li><b>disable</b> - Modul deaktivieren</li>
@@ -1624,12 +1677,17 @@ sub Gemini_SendFunctionResult {
       Wenn <b>controlList</b> oder <b>controlRoom</b> konfiguriert ist, kann Gemini sowohl
       Geraete steuern als auch Statusfragen beantworten und Automatisierungen anlegen. 
       Der Geraete-Status aus <b>deviceList</b>/<b>deviceRoom</b> wird automatisch als Kontext mitgegeben.
+      <b>Mehrere Geräte parallel steuern:</b> "Fahre alle Rolläden hoch" → Gemini sendet mehrere
+      set_device-Befehle gleichzeitig.<br>
       Beispiel: <code>set GeminiAI chat Ist die Wohnzimmerlampe an?</code><br>
       Beispiel: <code>set GeminiAI chat Mach bitte das Licht im Flur aus</code><br>
+      Beispiel: <code>set GeminiAI chat Fahre alle Rolläden hoch</code><br>
       Beispiel: <code>set GeminiAI chat Schalte das Licht morgen um 7 Uhr ein</code><br>
       Beispiel: <code>set GeminiAI chat Benachrichtige mich wenn die Haustuer geoeffnet wird</code></li>
     <li><b>control</b> &lt;Anweisung&gt; - Gemini steuert FHEM-Geraete eigenstaendig per
       Function Calling und kann auch AT/NOTIFY-Devices anlegen. 
+      <b>Mehrere Geräte parallel:</b> "Alle Lampen ausschalten" → Gemini erkennt dies und
+      sendet mehrere set_device-Befehle gleichzeitig.<br>
       Beispiel: <code>set GeminiAI control Mach die Wohnzimmerlampe an</code><br>
       Beispiel: <code>set GeminiAI control Schalte in 5 Minuten alle Lampen aus</code><br>
       Beispiel: <code>set GeminiAI control Wenn die Tuer aufgeht, schalte das Licht ein</code>.
@@ -1658,13 +1716,15 @@ sub Gemini_SendFunctionResult {
     <li><b>totalTokenCount</b> - Gesamtsumme der verbrauchten Tokens (Input + Output)</li>                      
   </ul><br>
 
-  <b>Beispiele für Automatisierung</b><br>
+  <b>Beispiele für Automatisierung und Mehrfach-Steuerung</b><br>
   <ul>
     <li><code>set GeminiAI chat Schalte das Licht um 18:00 ein</code> - Legt AT-Device an</li>
     <li><code>set GeminiAI chat In 30 Minuten soll die Heizung ausgehen</code> - Relatives AT-Device</li>
     <li><code>set GeminiAI chat Jeden Tag um 22:00 alle Lampen ausschalten</code> - Wiederkehrendes AT</li>
     <li><code>set GeminiAI chat Wenn die Haustuer aufgeht, schalte das Licht ein</code> - NOTIFY (einmalig)</li>
     <li><code>set GeminiAI chat Überwache die Temperatur, wenn sie über 25 Grad geht, sende Alarm</code> - NOTIFY (permanent)</li>
+    <li><code>set GeminiAI chat Fahre alle Rolläden auf 100%</code> - Mehrere Geräte parallel</li>
+    <li><code>set GeminiAI chat Schalte alle Lampen im Wohnzimmer aus</code> - Mehrere Geräte parallel</li>
   </ul>
 </ul>
 
