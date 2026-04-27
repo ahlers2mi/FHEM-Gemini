@@ -770,6 +770,7 @@ sub Gemini_BuildStaticDeviceContext {
     my @blacklist = Gemini_GetBlacklist($hash);
     
     my $context = "Smart-Home Geräte (Struktur):\n";
+    $context .= "name(alias)|type|R:readings|comment";
     
     for my $devName (@devices) {
         next unless exists $main::defs{$devName};
@@ -779,7 +780,7 @@ sub Gemini_BuildStaticDeviceContext {
         
         # Kompakte Zeile: name (alias) | type | R:readings | comment
         $context .= $devName;
-        $context .= " ($alias)" if $alias && $alias ne $devName;
+        $context .= "($alias)" if $alias && $alias ne $devName;
         $context .= "|$type";
         
         # Readings kompakt (nur Namen, keine Werte)
@@ -823,7 +824,8 @@ sub Gemini_BuildDynamicDeviceStatus {
     my @blacklist    = Gemini_GetBlacklist($hash);
     my $maxReadings  = AttrVal($name, 'maxReadingsPerDevice', 20);
     
-    my $status = "Status:\n";
+    my $status = "Aktueller Status:\n";
+    $status .= "name|state|reading1=x,reading2=y..";
     
     for my $devName (@devices) {
         next unless exists $main::defs{$devName};
@@ -831,8 +833,8 @@ sub Gemini_BuildDynamicDeviceStatus {
         my $alias = AttrVal($devName, 'alias', $devName);
         my $state = ReadingsVal($devName, 'state', '?');
         
-        # Kompakte Zeile: alias: state (reading=val, ...)
-        $status .= "$alias:$state";
+        # Kompakte Zeile: Name: state (reading=val, ...)
+        $status .= "$devName|$state";
         
         # Readings mit Limit
         if (exists $dev->{READINGS}) {
@@ -855,9 +857,8 @@ sub Gemini_BuildDynamicDeviceStatus {
             }
             
             if (@values) {
-                $status .= "(" . join(',', @values);
+                $status .= "|" . join(',', @values);
                 $status .= "...+" . ($totalReadings - $maxReadings) if $truncated;
-                $status .= ")";
                 
                 # Log wenn gekürzt
                 if ($truncated) {
@@ -927,6 +928,7 @@ sub Gemini_BuildStaticControlContext {
     my @blacklist = Gemini_GetBlacklist($hash);
     
     my $context = "Steuerbare Geräte:\n";
+    $context .= "name(alias)|cmds|comment";
     
     for my $devName (@devices) {
         next unless exists $main::defs{$devName};
@@ -946,7 +948,7 @@ sub Gemini_BuildStaticControlContext {
         
         # Kompakte Zeile: name (alias) | cmds | comment
         $context .= $devName;
-        $context .= " ($alias)" if $alias ne $devName;
+        $context .= "($alias)" if $alias ne $devName;
         $context .= "|$cmdsStr";
         
         # Nur GeminiComment (wichtiger als normaler comment)
