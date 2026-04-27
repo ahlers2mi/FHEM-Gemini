@@ -770,7 +770,7 @@ sub Gemini_BuildStaticDeviceContext {
     my @blacklist = Gemini_GetBlacklist($hash);
     
     my $context = "Smart-Home Geräte (Struktur):\n";
-    $context .= "name(alias)|type|R:readings|comment";
+    $context .= "name(alias)|type|R:readings|comment\n";
     
     for my $devName (@devices) {
         next unless exists $main::defs{$devName};
@@ -825,7 +825,7 @@ sub Gemini_BuildDynamicDeviceStatus {
     my $maxReadings  = AttrVal($name, 'maxReadingsPerDevice', 20);
     
     my $status = "Aktueller Status:\n";
-    $status .= "name|state|reading1=x,reading2=y..";
+    $status .= "name|state|reading1=x,reading2=y..\n";
     
     for my $devName (@devices) {
         next unless exists $main::defs{$devName};
@@ -928,7 +928,7 @@ sub Gemini_BuildStaticControlContext {
     my @blacklist = Gemini_GetBlacklist($hash);
     
     my $context = "Steuerbare Geräte:\n";
-    $context .= "name(alias)|cmds|comment";
+    $context .= "name(alias)|cmds|comment\n";
     
     for my $devName (@devices) {
         next unless exists $main::defs{$devName};
