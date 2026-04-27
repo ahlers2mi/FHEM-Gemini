@@ -1,6 +1,6 @@
 # FHEM-Gemini
 
-FHEM-Modul zur Anbindung der Google Gemini AI API. Ermöglicht Textanfragen, Bildanalyse, Smart-Home-Gerätesteuerung per Sprachbefehl (Function Calling) und mehr – direkt aus FHEM heraus.
+FHEM-Modul zur Anbindung der Google Gemini AI API. Ermöglicht Textanfragen, Bildanalyse, Smart-Home-Gerätesteuerung per Sprachbefehl (Function Calling), Automatisierung via AT/NOTIFY-Devices und mehr – direkt aus FHEM heraus. **Optimiert für minimalen Token-Verbrauch durch intelligentes Prompt Caching.**
 
 ## Inhaltsverzeichnis
 
@@ -12,6 +12,7 @@ FHEM-Modul zur Anbindung der Google Gemini AI API. Ermöglicht Textanfragen, Bil
 - [Attribute](#attribute)
 - [Readings](#readings)
 - [Praxisbeispiele](#praxisbeispiele)
+- [Performance und Kosten](#performance-und-kosten)
 - [Fehlerbehebung](#fehlerbehebung)
 - [Versionshistorie](#versionshistorie)
 - [Lizenz](#lizenz)
@@ -23,10 +24,13 @@ FHEM-Modul zur Anbindung der Google Gemini AI API. Ermöglicht Textanfragen, Bil
 - 💬 **Textfragen** – beliebige Fragen an Gemini stellen und die Antwort in FHEM-Readings speichern
 - 🖼️ **Bildanalyse** – Kamerabilder oder Snapshots direkt analysieren lassen (z. B. Türkamera, Überwachungskamera)
 - 🏠 **Gerätesteuerung** – Smart-Home-Geräte per natürlicher Sprache steuern (Function Calling, Whitelist-basiert)
+- 🎯 **Mehrfach-Steuerung** – mehrere Geräte gleichzeitig steuern ("Fahre alle Rolläden hoch", "Schalte alle Lampen im Wohnzimmer aus")
+- ⏰ **Automatisierung** – AT-Devices für zeitgesteuerte Aktionen und NOTIFY-Devices für eventbasierte Reaktionen direkt per Sprachbefehl anlegen
 - 📋 **Geräte-Status** – Zusammenfassung aller oder ausgewählter Geräte inkl. Raumfilter
 - 🔄 **Multi-Turn Chat** – Kontext über mehrere Anfragen hinweg erhalten (optional deaktivierbar)
 - 📝 **Mehrere Ausgabeformate** – Antwort als Roh-Markdown, reiner Text und HTML verfügbar
 - 🛡️ **Sicherheit** – nur explizit freigegebene Geräte dürfen gesteuert werden; konfigurierbarer Readings-Filter
+- 🚀 **Optimiert für große Installationen** – ultra-kompaktes Format spart bis zu 88% Token-Kosten bei 150+ Geräten durch intelligentes Prompt Caching
 
 ---
 
@@ -79,8 +83,7 @@ attr GeminiAI apiKey DEIN-GOOGLE-GEMINI-API-KEY
 attr GeminiAI model gemini-3.1-flash-lite-preview
 ```
 
-`gemini-3.1-flash-lite-preview` ist bereits der Standardwert. Weitere verfügbare Modelle:
-`gemini-3.1-flash-image-preview`, `gemini-3.1-pro-preview`, `gemini-3-flash-preview`, `gemini-3-pro-image-preview` u. a.
+`gemini-3.1-flash-lite-preview` ist bereits der Standardwert. Weitere verfügbare Modelle: `gemini-3.1-flash-image-preview`, `gemini-3.1-pro-preview`, `gemini-3-flash-preview`, `gemini-3-pro-image-preview` u. a.
 
 ### 4. System-Prompt setzen (optional)
 
@@ -89,14 +92,15 @@ Mit dem `systemPrompt`-Attribut kann Gemini eine Rolle oder ein Verhalten vorgeg
 ```
 attr GeminiAI systemPrompt Du bist ein KI-Assistent und Teil meiner FHEM Haussteuerung. Deine Aufgaben sind:
 
-### 1. Geräte steuern und Rückmeldung geben > 
-- **WICHTIG:** Verwende für alle Befehle **ausschließlich** den exakten `Internals NAME` aus FHEM. Ignoriere Aliase, Räume oder Beschreibungen bei der Befehlserstellung. > 
-- Wenn du den exakten FHEM-Namen eines Geräts nicht eindeutig aus dem Kontext identifizieren kannst, frage **zwingend** nach, bevor du einen Befehl generierst. > 
-- Erstelle keine komplexen `notify` oder `at` Befehle, wenn der exakte Trigger oder der Ziel-Gerätename unsicher sind. > 
-- Syntax für Aktionen: `set <EXAKTER_NAME> <PARAMETER> <WERT>` (Beispiel: `set Lamp_Esszimmer on`). > - Syntax für Automatisierungen: Wenn du ein `notify` erstellst, nutze exakt `set <TRIGGER_GERÄT> <EVENT> <ZIEL_GERÄT> <BEFEHL>`.
+### 1. Geräte steuern und Rückmeldung geben
+- **WICHTIG:** Verwende für alle Befehle **ausschließlich** den exakten `Internals NAME` aus FHEM. Ignoriere Aliase, Räume oder Beschreibungen bei der Befehlserstellung.
+- Wenn du den exakten FHEM-Namen eines Geräts nicht eindeutig aus dem Kontext identifizieren kannst, frage **zwingend** nach, bevor du einen Befehl generierst.
+- Erstelle keine komplexen `notify` oder `at` Befehle, wenn der exakte Trigger oder der Ziel-Gerätename unsicher sind.
+- Syntax für Aktionen: `set <EXAKTER_NAME> <PARAMETER> <WERT>` (Beispiel: `set Lamp_Esszimmer on`).
+- Syntax für Automatisierungen: Wenn du ein `notify` erstellst, nutze exakt `set <TRIGGER_GERÄT> <EVENT> <ZIEL_GERÄT> <BEFEHL>`.
 
 ### Gerätespezifische Regeln:
-- in der Beschreibung für Gemini könnte ein Hinweis zum schalten stehen
+- In der Beschreibung für Gemini könnte ein Hinweis zum Schalten stehen
 - **Rollladen:** Wenn das Gerät als Rolllade erkannt wird und den set-Parameter "pct" hat:
   - 0 = ganz schließen, 100 = ganz öffnen.
 - **Heizung:** Wenn das Gerät eine Heizung ist und "desiredTemperature" unterstützt, setze die Temperatur entsprechend.
@@ -185,6 +189,20 @@ set GeminiAI control Fahre alle Rolläden runter
 set GeminiAI control Dimme das Licht im Schlafzimmer auf 30 Prozent
 ```
 
+**Mehrere Geräte gleichzeitig steuern:**
+
+```
+set GeminiAI control Fahre alle Rolläden auf 100%
+set GeminiAI control Schalte alle Lampen im Wohnzimmer aus
+set GeminiAI control Dimme alle Lichter auf 50%
+```
+
+Gemini erkennt automatisch, wenn mehrere Geräte betroffen sind, und sendet mehrere `set_device`-Befehle parallel. Im Log wird dies protokolliert:
+
+```
+2026-04-27 15:30:45 Gemini (GeminiAI): Mehrere Befehle parallel: set_device, set_device, set_device
+```
+
 Gemini löst Alias-Namen automatisch auf interne FHEM-Namen auf und wählt passende `set`-Befehle selbstständig aus. Nur Geräte aus `controlList` (oder `controlRoom`) dürfen gesteuert werden.
 
 Gemini kann im Rahmen eines `control`-Befehls den aktuellen Status eines Geräts selbstständig abfragen (z. B. um zu prüfen, ob eine Lampe bereits an ist), bevor es einen Steuerbefehl absetzt.
@@ -198,21 +216,53 @@ set GeminiAI control Mach alle Lichter im Wohnzimmer aus
 
 `controlList` und `controlRoom` können gleichzeitig gesetzt sein – Duplikate werden automatisch entfernt.
 
+### Automatisierung per Sprachbefehl
+
+**AT-Devices (zeitgesteuert):**
+
+```
+set GeminiAI chat Schalte das Licht um 18:00 ein
+set GeminiAI chat In 30 Minuten soll die Heizung ausgehen
+set GeminiAI chat Jeden Tag um 22:00 alle Lampen ausschalten
+set GeminiAI chat Jeden Montag um 7:00 die Rolläden hochfahren
+```
+
+Gemini legt automatisch AT-Devices an:
+- **Einmalige Aktionen** (z.B. "in 30 Minuten") werden nach Ausführung automatisch gelöscht
+- **Wiederkehrende Aktionen** (z.B. "jeden Tag um 22:00") bleiben bestehen
+
+**NOTIFY-Devices (eventbasiert):**
+
+```
+set GeminiAI chat Wenn die Haustür aufgeht, schalte das Licht ein
+set GeminiAI chat Benachrichtige mich wenn die Temperatur über 25 Grad steigt
+set GeminiAI chat Wenn Bewegung im Flur erkannt wird, mach das Licht an
+```
+
+Gemini legt automatisch NOTIFY-Devices an:
+- **Einmalige Reaktionen** (Standard) löschen sich nach Ausführung selbst
+- **Permanente Überwachung** kann per Kontext angefordert werden ("dauerhaft überwachen", "permanent")
+
+Die angelegten Devices werden im konfigurierten `automationRoom` (oder im ersten Raum des Gemini-Devices) abgelegt. Der Name des letzten angelegten Devices steht im Reading `lastAutomation`.
+
 ### Universeller Chat-Befehl (für Telegram-Integration)
 
-Der `chat`-Befehl ermöglicht allgemeine Fragen, Geräte-Statusabfragen und Steuerungsbefehle in einem einzigen Befehl. Das ist ideal für die Integration mit Telegram oder anderen Messaging-Diensten, bei denen Nachrichten als einfacher Text ankommen:
+Der `chat`-Befehl ermöglicht allgemeine Fragen, Geräte-Statusabfragen, Steuerungsbefehle und Automatisierung in einem einzigen Befehl. Das ist ideal für die Integration mit Telegram oder anderen Messaging-Diensten, bei denen Nachrichten als einfacher Text ankommen:
 
 ```
 set GeminiAI chat Ist die Wohnzimmerlampe an?
 set GeminiAI chat Mach bitte das Licht im Flur aus
+set GeminiAI chat Fahre alle Rolläden hoch
 set GeminiAI chat Stelle die Heizung auf 20 Grad
 set GeminiAI chat Was ist der Unterschied zwischen Wärmepumpe und Brennwertkessel?
 set GeminiAI chat Gib mir eine Zusammenfassung aller Geräte
+set GeminiAI chat Schalte morgen um 7 Uhr das Licht ein
+set GeminiAI chat Wenn die Tür aufgeht, schalte das Licht ein
 ```
 
-Gemini entscheidet selbstständig, ob eine allgemeine Frage beantwortet, ein Gerätestatus abgefragt oder ein Steuerungsbefehl ausgeführt werden soll.
+Gemini entscheidet selbstständig, ob eine allgemeine Frage beantwortet, ein Gerätestatus abgefragt, ein Steuerungsbefehl ausgeführt oder eine Automatisierung angelegt werden soll.
 
-- Wenn `controlList` oder `controlRoom` konfiguriert ist, kann Gemini Geräte steuern und Statusfragen über Function Calling beantworten.
+- Wenn `controlList` oder `controlRoom` konfiguriert ist, kann Gemini Geräte steuern, Statusfragen über Function Calling beantworten und Automatisierungen anlegen.
 - Der Geräte-Status aus `deviceList`/`deviceRoom` wird automatisch als Kontext mitgegeben, damit Gemini auch Fragen zu Geräten außerhalb der Steuerliste beantworten kann.
 - Wenn keine Steuerliste konfiguriert ist, funktioniert `chat` wie `ask` (ggf. mit Geräte-Kontext).
 
@@ -255,6 +305,7 @@ get GeminiAI chatHistory
 | `apiKey` | Google Gemini API Key **(Pflicht)** | – |
 | `model` | Gemini-Modell | `gemini-3.1-flash-lite-preview` |
 | `maxHistory` | Maximale Anzahl gespeicherter Chat-Nachrichten | `20` |
+| `maxReadingsPerDevice` | Maximale Anzahl Readings pro Gerät im dynamischen Status. Bei Überschreitung wird im Log (Level 4) protokolliert. Reduziert Token-Verbrauch bei Geräten mit sehr vielen Readings. | `20` |
 | `safetySettings` | Konfiguriert die Schwellenwerte für die Inhaltsfilterung der Google-API. Hilfreich, wenn harmlose Anfragen (z.B. Personen auf Kamerabildern) blockiert werden. (`BLOCK_NONE`, `BLOCK_ONLY_HIGH`, `BLOCK_MEDIUM_AND_ABOVE`) | `BLOCK_ONLY_HIGH` |
 | `systemPrompt` | Optionaler System-Prompt (Rolle/Verhalten von Gemini) | – |
 | `timeout` | HTTP-Timeout in Sekunden | `30` |
@@ -264,6 +315,7 @@ get GeminiAI chatHistory
 | `deviceRoom` | Komma-getrennte Raumliste; alle Geräte mit passendem `room`-Attribut werden für `askAboutDevices` verwendet | – |
 | `controlList` | Komma-getrennte Liste der Geräte, die Gemini steuern darf **(Pflicht für `control`/`chat` mit Steuerung)** | – |
 | `controlRoom` | Komma-getrennte Raumliste; alle Geräte mit passendem `room`-Attribut werden automatisch als steuerbar eingestuft und ergänzen `controlList`. Duplikate werden entfernt. | – |
+| `automationRoom` | Raum für automatisch angelegte AT/NOTIFY-Geräte. Wenn nicht gesetzt, wird der erste Raum des Gemini-Devices selbst verwendet. | – |
 | `readingBlacklist` | Leerzeichen-getrennte Liste von Reading- bzw. Befehlsnamen, die **nicht** an Gemini übermittelt werden. Wildcards mit `*` werden unterstützt (z. B. `R-*`, `Wifi_*`). Wenn nicht gesetzt, gilt die eingebaute Standardliste. | `attrTemplate associate R-* RegL_* associatedWith peerListRDate protLastRcv lastTimeSync lastcmd Heap LoadAvg Uptime Wifi_*` |
 
 ---
@@ -280,6 +332,10 @@ get GeminiAI chatHistory
 | `chatHistory` | Anzahl der Nachrichten im Chat-Verlauf |
 | `lastCommand` | Letzter von Gemini ausgeführter `set`-Befehl (z. B. `Lampe1 on`) |
 | `lastCommandResult` | Ergebnis des letzten `set`-Befehls (`ok` oder Fehlermeldung) |
+| `lastAutomation` | Letztes angelegtes AT/NOTIFY-Gerät |
+| `promptTokenCount` | Anzahl der gesendeten Tokens (Input) |
+| `candidatesTokenCount` | Anzahl der vom Modell generierten Tokens (Output) |
+| `totalTokenCount` | Gesamtsumme der verbrauchten Tokens (Input + Output) |
 
 ---
 
@@ -298,7 +354,7 @@ define GeminiNotify notify GeminiAI:responsePlain {
 
 ### Antwort per Telegram verschicken
 
-Mit dem `chat`-Befehl können eingehende Telegram-Nachrichten direkt an Gemini weitergeleitet werden – Gemini entscheidet selbst, ob eine allgemeine Frage beantwortet, ein Gerätestatus abgefragt oder ein Gerät gesteuert werden soll:
+Mit dem `chat`-Befehl können eingehende Telegram-Nachrichten direkt an Gemini weitergeleitet werden – Gemini entscheidet selbst, ob eine allgemeine Frage beantwortet, ein Gerätestatus abgefragt, ein Gerät gesteuert oder eine Automatisierung angelegt werden soll:
 
 ```perl
 define GeminiTelegramIn notify TelegramBot:msgText.* {
@@ -345,6 +401,73 @@ Das Reading `responseHTML` enthält die Antwort als HTML, direkt verwendbar in W
 {ReadingsVal("GeminiAI","responseHTML","")}
 ```
 
+### Automatische Nachtabschaltung via Sprachbefehl
+
+```
+set GeminiAI chat Schalte jeden Tag um 23:00 alle Lampen aus und fahre die Rolläden runter
+```
+
+Gemini erstellt automatisch wiederkehrende AT-Devices für beide Aktionen.
+
+### Sicherheits-Notify
+
+```
+set GeminiAI chat Wenn die Haustür nach 22:00 geöffnet wird, schicke mir eine Nachricht
+```
+
+Gemini erstellt ein permanentes NOTIFY-Device, das auf das Ereignis reagiert.
+
+---
+
+## Performance und Kosten
+
+### Prompt Caching – bis zu 88% Token-Ersparnis
+
+Das Modul nutzt **intelligentes Prompt Caching** für maximale Effizienz:
+
+**Statischer Context** (wird gecacht):
+- Gerätestruktur (Name, Typ, verfügbare Readings, Attribute)
+- Set-Befehle der steuerbaren Geräte
+- System-Prompt
+
+**Dynamischer Context** (günstiger Input):
+- Aktuelle Readings-Werte
+- Aktuelle Frage/Anweisung
+
+### Token-Verbrauch bei 150 Geräten:
+
+| Request | Vorher | Nachher | Ersparnis |
+|---|---|---|---|
+| **1. Request** | ~26.000 | ~8.000 | **69%** |
+| **2.-N. Request** | ~26.000 | ~3.000 | **88%** |
+
+**Beispiel-Rechnung** (100 Requests/Monat):
+- Vorher: 2.600.000 Tokens/Monat
+- Nachher: 305.000 Tokens/Monat
+- **Ersparnis: ~2.3 Mio. Tokens/Monat** 🎉
+
+### Readings-Limit optimieren
+
+Bei Geräten mit sehr vielen Readings (z.B. HM-Devices mit 50+ Readings) kannst du das Limit anpassen:
+
+```
+attr GeminiAI maxReadingsPerDevice 10
+```
+
+Im Log (Level 4) wird protokolliert, wenn Readings gekürzt werden:
+
+```
+2026-04-27 15:30:45 Gemini (GeminiAI): WZ_Thermo Readings gekürzt (35 -> 10)
+```
+
+### Token-Verbrauch überwachen
+
+Die Readings `promptTokenCount`, `candidatesTokenCount` und `totalTokenCount` zeigen den Verbrauch pro Request:
+
+```
+{ReadingsVal("GeminiAI","totalTokenCount","")}
+```
+
 ---
 
 ## Fehlerbehebung
@@ -358,6 +481,8 @@ Das Reading `responseHTML` enthält die Antwort als HTML, direkt verwendbar in W
 | Keine Gerätesteuerung, Fehler „controlList/controlRoom nicht gesetzt" | `controlList` und `controlRoom` fehlen | `attr GeminiAI controlList Gerät1,Gerät2` oder `attr GeminiAI controlRoom Raum1` setzen |
 | Timeout-Fehler bei langen Antworten | Standard-Timeout zu kurz | `attr GeminiAI timeout 60` erhöhen |
 | Antwort enthält interne Readings (z. B. `Wifi_RSSI`) | Blacklist zu kurz | `readingBlacklist` um unerwünschte Readings ergänzen |
+| Hoher Token-Verbrauch | Zu viele Readings pro Gerät | `maxReadingsPerDevice` reduzieren (z.B. auf 10) |
+| AT/NOTIFY-Devices landen im falschen Raum | `automationRoom` nicht gesetzt | `attr GeminiAI automationRoom Automation` setzen |
 
 Detaillierte Fehlermeldungen werden im FHEM-Log auf Level 3 ausgegeben. Zum Aktivieren:
 
@@ -371,9 +496,12 @@ attr global verbose 3
 
 | Version | Datum | Änderung |
 |---|---|---|
-| 4.0.1 | 2026-04-21 | Neu: Attribut safetySettings zur Steuerung der Inhaltsfilterung (Vermeidung von False-Positives bei der Bildanalyse)
-| 4.0.0 | 2026-04-20 | Neu: AT/NOTIFY Support via Function Calling für zeitgesteuerte und eventbasierte Aktionen; Attribut automationRoom
-| 3.3.0 | 2026-04-15 | Metadatareadings candidatesTokenCount, promptTokenCount, totalTokenCount
+| 4.1.1 | 2026-04-27 | **Performance-Update:** Ultra-kompaktes Format für statischen Context (60-70% Token-Ersparnis bei 150 Geräten); neues Attribut `maxReadingsPerDevice` (Standard: 20) mit Log bei Kürzung; optimiertes Prompt Caching (statische Gerätestruktur wird gecacht, dynamische Werte bleiben aktuell); Mehrfach-Befehle-Unterstützung im Function Calling dokumentiert und mit Log-Ausgabe versehen |
+| 4.1.0 | 2026-04-27 | Optimierung für Prompt Caching: Trennung von statischer Gerätestruktur (system_instruction, wird gecacht) und dynamischen Werten (user message, günstiger Input) |
+| 4.0.1 | 2026-04-21 | Neu: Attribut `safetySettings` zur Steuerung der Inhaltsfilterung (Vermeidung von False-Positives bei der Bildanalyse) |
+| 4.0.0 | 2026-04-20 | Neu: AT/NOTIFY Support via Function Calling für zeitgesteuerte und eventbasierte Aktionen; Attribut `automationRoom`; Auto-Cleanup für einmalige NOTIFY-Devices; Reading `lastAutomation` |
+| 3.4.0 | 2026-04-16 | Neu: Eigenes globales Attribut `<name>Comment` für Steuerinfos an Gemini |
+| 3.3.0 | 2026-04-15 | Neu: Metadatareadings `candidatesTokenCount`, `promptTokenCount`, `totalTokenCount` |
 | 3.2.0 | 2026-04-13 | Neuer Befehl `chat`: universeller Befehl für allgemeine Fragen, Geräte-Status und Steuerung in einem (ideal für Telegram); neues Attribut `controlRoom`: steuerbare Geräte per Raum angeben (analog zu `deviceRoom`) |
 | 3.1.0 | 2026-04-13 | `comment`-Attribut der Geräte wird jetzt an Gemini übermittelt (in `askAboutDevices` und `control`) |
 | 3.0.0 | 2026-04-13 | Neues Attribut `readingBlacklist`: konfigurierbare Filterliste für Readings und set-Befehle mit Wildcard-Unterstützung (`*`); ersetzt die hardcodierte Blacklist; erweiterte Standardliste |
