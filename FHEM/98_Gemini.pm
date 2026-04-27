@@ -55,6 +55,7 @@
 ##############################################################################
 
 # Versionshistorie:
+# 4.0.2 - 2026-04-27  Neu: Optimierung Prompt caching
 # 4.0.1 - 2026-04-21  Neu: Attribut safetySettings zur Steuerung der Inhaltsfilterung (Vermeidung von False-Positives bei der Bildanalyse)
 #                          - safetySettings
 # 4.0.1 - 2026-04-20  Neu: AT/NOTIFY Support via Function Calling
@@ -174,7 +175,7 @@ sub Gemini_Define {
     my $name = $args[0];
     $hash->{NAME}        = $name;
     $hash->{CHAT}        = [];   # Chat-Verlauf als Array-Referenz
-    $hash->{VERSION}     = '4.0.1';
+    $hash->{VERSION}     = '4.0.2';
 
     readingsSingleUpdate($hash, 'state',             'initialized', 1);
     readingsSingleUpdate($hash, 'response',          '-',           0);
@@ -1006,10 +1007,10 @@ sub Gemini_SendControl {
 
     my $fullSystem = '';
     $fullSystem .= $systemPrompt    if $systemPrompt;
-    $fullSystem .= "\n\n"           if $fullSystem && $extraContext;
-    $fullSystem .= $extraContext    if $extraContext;
     $fullSystem .= "\n\n"           if $fullSystem && $controlContext;
     $fullSystem .= $controlContext  if $controlContext;
+    $fullSystem .= "\n\n"           if $fullSystem && $extraContext;
+    $fullSystem .= $extraContext    if $extraContext;    
 
     if ($fullSystem) {
         $requestBody{system_instruction} = {
