@@ -56,12 +56,12 @@
 ##############################################################################
 
 # Versionshistorie:
-# 4.0.3 - 2026-04-27  Neu: Ultra-kompaktes Format für statischen Context (60-70% Token-Ersparnis)
+# 4.1.1 - 2026-04-27  Neu: Ultra-kompaktes Format für statischen Context (60-70% Token-Ersparnis)
 #                          Format: name (alias) | type | R:reading1,reading2 | comment
 #                          Neues Attribut maxReadingsPerDevice (Standard: 20)
 #                          Log-Einträge wenn Readings gekürzt werden
 #                          Hinweis: Mehrfach-Befehle bereits unterstützt (Function Calling parallel)
-# 4.0.2 - 2026-04-27  Neu: Optimierung Prompt Caching - Trennung von statischer
+# 4.1.0 - 2026-04-27  Neu: Optimierung Prompt Caching - Trennung von statischer
 #                          Gerätestruktur (system_instruction, wird gecacht) und
 #                          dynamischen Werten (user message, günstiger Input).
 #                          Neue Funktionen: Gemini_BuildStaticDeviceContext,
@@ -186,7 +186,7 @@ sub Gemini_Define {
     my $name = $args[0];
     $hash->{NAME}        = $name;
     $hash->{CHAT}        = [];   # Chat-Verlauf als Array-Referenz
-    $hash->{VERSION}     = '4.0.3';
+    $hash->{VERSION}     = '4.1.1';
 
     readingsSingleUpdate($hash, 'state',                'initialized', 1);
     readingsSingleUpdate($hash, 'response',             '-',           0);
