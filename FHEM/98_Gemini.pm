@@ -30,7 +30,7 @@
 #                      uebermittelt werden; Wildcards (*) werden unterstuetzt.
 #                      Standard: attrTemplate associate R-* RegL_* associatedWith peerListRDate
 #                                protLastRcv lastTimeSync lastcmd Heap LoadAvg Uptime Wifi_*
-#   safetySettings  - :BLOCK_NONE,BLOCK_ONLY_HIGH,BLOCK_MEDIUM_AND_ABOVE ' 
+#   safetySettings  - BLOCK_NONE,BLOCK_ONLY_HIGH,BLOCK_MEDIUM_AND_ABOVE 
 #
 # Set-Befehle:
 #   ask <Frage>                    - Textfrage stellen
@@ -55,7 +55,11 @@
 ##############################################################################
 
 # Versionshistorie:
-# 4.0.2 - 2026-04-27  Neu: Optimierung Prompt caching
+# 4.1.0 - 2026-04-27  Neu: Optimierung Prompt Caching - Trennung von statischer
+#                          Gerätestruktur (system_instruction, wird gecacht) und
+#                          dynamischen Werten (user message, günstiger Input).
+#                          Neue Funktionen: Gemini_BuildStaticDeviceContext,
+#                          Gemini_BuildDynamicDeviceStatus, Gemini_BuildStaticControlContext
 # 4.0.1 - 2026-04-21  Neu: Attribut safetySettings zur Steuerung der Inhaltsfilterung (Vermeidung von False-Positives bei der Bildanalyse)
 #                          - safetySettings
 # 4.0.1 - 2026-04-20  Neu: AT/NOTIFY Support via Function Calling
@@ -175,7 +179,7 @@ sub Gemini_Define {
     my $name = $args[0];
     $hash->{NAME}        = $name;
     $hash->{CHAT}        = [];   # Chat-Verlauf als Array-Referenz
-    $hash->{VERSION}     = '4.0.2';
+    $hash->{VERSION}     = '4.1.0';
 
     readingsSingleUpdate($hash, 'state',             'initialized', 1);
     readingsSingleUpdate($hash, 'response',          '-',           0);
@@ -212,7 +216,7 @@ sub Gemini_Set {
     if ($cmd eq 'ask') {
         return "Usage: set $name ask <Frage>" unless @args;
         my $question = join(' ', @args);
-        Gemini_SendRequest($hash, $question, undef, undef);
+        Gemini_SendRequest($hash, $question, undef, 0);
         return undef;
 
     } elsif ($cmd eq 'askWithImage') {
@@ -220,13 +224,12 @@ sub Gemini_Set {
         my $imagePath = $args[0];
         my $question  = join(' ', @args[1..$#args]);
         return "Bilddatei nicht gefunden: $imagePath" unless -f $imagePath;
-        Gemini_SendRequest($hash, $question, $imagePath, undef);
+        Gemini_SendRequest($hash, $question, $imagePath, 0);
         return undef;
 
     } elsif ($cmd eq 'askAboutDevices') {
-        my $question      = @args ? join(' ', @args) : 'Gib mir eine Zusammenfassung aller Geräte und ihres aktuellen Status.';
-        my $deviceContext = Gemini_BuildDeviceContext($hash);
-        Gemini_SendRequest($hash, $question, undef, $deviceContext);
+        my $question = @args ? join(' ', @args) : 'Gib mir eine Zusammenfassung aller Geräte und ihres aktuellen Status.';
+        Gemini_SendRequest($hash, $question, undef, 1);
         return undef;
 
     } elsif ($cmd eq 'chat') {
@@ -234,11 +237,9 @@ sub Gemini_Set {
         my $message = join(' ', @args);
         my @controlDevices = Gemini_GetControlDevices($hash);
         if (@controlDevices) {
-            my $deviceContext = Gemini_BuildDeviceContext($hash);
-            Gemini_SendControl($hash, $message, $deviceContext);
+            Gemini_SendControl($hash, $message, 1);
         } else {
-            my $deviceContext = Gemini_BuildDeviceContext($hash);
-            Gemini_SendRequest($hash, $message, undef, $deviceContext || undef);
+            Gemini_SendRequest($hash, $message, undef, 1);
         }
         return undef;
 
@@ -247,7 +248,7 @@ sub Gemini_Set {
         my @controlDevices = Gemini_GetControlDevices($hash);
         return "Fehler: Weder controlList noch controlRoom ist gesetzt" unless @controlDevices;
         my $instruction = join(' ', @args);
-        Gemini_SendControl($hash, $instruction, undef);
+        Gemini_SendControl($hash, $instruction, 0);
         return undef;
 
     } elsif ($cmd eq 'resetChat') {
@@ -289,7 +290,7 @@ sub Gemini_Get {
 # Hauptfunktion: Anfrage an Gemini API senden
 ##############################################################################
 sub Gemini_SendRequest {
-    my ($hash, $question, $imagePath, $deviceContext) = @_; 
+    my ($hash, $question, $imagePath, $includeDeviceStatus) = @_; 
     my $name = $hash->{NAME};
 
     if (AttrVal($name, 'disable', 0)) {
@@ -310,8 +311,21 @@ sub Gemini_SendRequest {
     my $timeout     = AttrVal($name, 'timeout',    30);
     my $maxHistory  = AttrVal($name, 'maxHistory', 20);
 
+    # DYNAMISCHER Teil: aktueller Gerätestatus (in user message, nicht gecacht)
+    my $dynamicStatus = '';
+    if ($includeDeviceStatus) {
+        $dynamicStatus = Gemini_BuildDynamicDeviceStatus($hash);
+    }
+
+    # User-Turn zusammenbauen
     my @parts;
 
+    # Erst dynamischer Status (falls gewünscht)
+    if ($dynamicStatus) {
+        push @parts, { text => $dynamicStatus };
+    }
+
+    # Dann Bild (falls vorhanden)
     if ($imagePath) {
         my $mimeType = Gemini_GetMimeType($imagePath);
         open(my $fh, '<', $imagePath) or do {
@@ -334,6 +348,7 @@ sub Gemini_SendRequest {
         Log3 $name, 4, "Gemini ($name): Bild geladen: $imagePath ($mimeType)";
     }
 
+    # Dann die eigentliche Frage
     push @parts, { text => $question };
 
     push @{$hash->{CHAT}}, {
@@ -344,6 +359,7 @@ sub Gemini_SendRequest {
     while (scalar(@{$hash->{CHAT}}) > $maxHistory) {
         shift @{$hash->{CHAT}};
     }
+    
     # Ensure history starts with a valid user text turn (API requirement):
     # remove leading model turns and orphaned user functionResponse turns
     # (a functionResponse without a preceding functionCall is invalid)
@@ -373,12 +389,18 @@ sub Gemini_SendRequest {
         ]
     );
 
-    my $systemPrompt = AttrVal($name, 'systemPrompt', '');
+    # STATISCHER Teil für system_instruction (wird gecacht!)
+    my $systemPrompt        = AttrVal($name, 'systemPrompt', '');
+    my $staticDeviceContext = '';
+    
+    if ($includeDeviceStatus) {
+        $staticDeviceContext = Gemini_BuildStaticDeviceContext($hash);
+    }
 
     my $fullSystem = '';
-    $fullSystem .= $systemPrompt   if $systemPrompt;
-    $fullSystem .= "\n\n"          if $systemPrompt && $deviceContext;
-    $fullSystem .= $deviceContext  if $deviceContext;
+    $fullSystem .= $systemPrompt if $systemPrompt;
+    $fullSystem .= "\n\n" if $systemPrompt && $staticDeviceContext;
+    $fullSystem .= $staticDeviceContext if $staticDeviceContext;
 
     if ($fullSystem) {
         $requestBody{system_instruction} = {
@@ -677,9 +699,9 @@ sub Gemini_GetAutomationRoom {
 }
 
 ##############################################################################
-# FHEM Device-Kontext für Gemini aufbauen
+# Hilfsfunktion: Liste der Geräte aus deviceList/deviceRoom ermitteln
 ##############################################################################
-sub Gemini_BuildDeviceContext {
+sub Gemini_GetDeviceList {
     my ($hash) = @_;
     my $name = $hash->{NAME};
 
@@ -716,9 +738,21 @@ sub Gemini_BuildDeviceContext {
         }
     }
 
+    return @devices;
+}
+
+##############################################################################
+# OPTIMIERT: Statischen Gerätekontext für Prompt Caching aufbauen
+# (Gerätestruktur ohne aktuelle Werte - wird gecacht in system_instruction)
+##############################################################################
+sub Gemini_BuildStaticDeviceContext {
+    my ($hash) = @_;
+    my $name = $hash->{NAME};
+
+    my @devices = Gemini_GetDeviceList($hash);
     return '' unless @devices;
 
-    my $context  = "Aktueller Status der Smart-Home Geräte:\n";
+    my $context   = "Verfügbare Smart-Home Geräte (Struktur):\n\n";
     my @blacklist = Gemini_GetBlacklist($hash);
 
     for my $devName (@devices) {
@@ -726,36 +760,69 @@ sub Gemini_BuildDeviceContext {
         my $dev   = $main::defs{$devName};
         my $alias = AttrVal($devName, 'alias', $devName);
 
-        Log3 $name, 5, "Gemini ($name): Alias " . $alias;
-
-        $context .= "\nGerät: $alias (intern: $devName)\n";
+        $context .= "Gerät: $alias (intern: $devName)\n";
         $context .= "  Typ: " . ($dev->{TYPE} // 'unbekannt') . "\n";
 
-        my $state = ReadingsVal($devName, 'state', 'unbekannt');
-        $context .= "  Status: $state\n";
-
+        # Nur verfügbare Readings OHNE aktuelle Werte auflisten
         if (exists $dev->{READINGS}) {
-            $context .= "  Readings:\n";
-            for my $reading (sort keys %{$dev->{READINGS}}) {
-                next if $reading eq 'state';
-                next if Gemini_IsBlacklisted($reading, @blacklist);
-                my $val  = $dev->{READINGS}{$reading}{VAL}  // '';
-                my $time = $dev->{READINGS}{$reading}{TIME} // '';
-                $context .= "    $reading: $val (Stand: $time)\n";
+            my @readings = grep { 
+                $_ ne 'state' && !Gemini_IsBlacklisted($_, @blacklist) 
+            } sort keys %{$dev->{READINGS}};
+            
+            if (@readings) {
+                $context .= "  Verfügbare Readings: " . join(', ', @readings) . "\n";
             }
         }
 
-        my @attributes = ('room', 'group', 'alias', 'comment', $hash->{NAME} . "Comment");
-
-        for my $attrName (@attributes) {
+        # Statische Attribute
+        for my $attrName ('room', 'group', 'alias', 'comment', $hash->{NAME} . "Comment") {
             my $attrVal = AttrVal($devName, $attrName, '');
             $context .= "  $attrName: $attrVal\n" if $attrVal;
         }
 
-        Log3 $name, 5, "Gemini ($name): " . $alias . ": " . $context;
+        $context .= "\n";
     }
 
     return $context;
+}
+
+##############################################################################
+# OPTIMIERT: Dynamischen Gerätestatus für User-Message aufbauen
+# (Aktuelle Werte - günstiger Input, nicht gecacht)
+##############################################################################
+sub Gemini_BuildDynamicDeviceStatus {
+    my ($hash) = @_;
+    my $name = $hash->{NAME};
+
+    my @devices = Gemini_GetDeviceList($hash);
+    return '' unless @devices;
+
+    my $status    = "Aktueller Gerätestatus:\n\n";
+    my @blacklist = Gemini_GetBlacklist($hash);
+
+    for my $devName (@devices) {
+        next unless exists $main::defs{$devName};
+        my $dev   = $main::defs{$devName};
+        my $alias = AttrVal($devName, 'alias', $devName);
+        my $state = ReadingsVal($devName, 'state', 'unbekannt');
+        
+        $status .= "$alias: $state";
+
+        # Nur wichtigste Readings mit aktuellen Werten (kompakt)
+        if (exists $dev->{READINGS}) {
+            my @values;
+            for my $reading (sort keys %{$dev->{READINGS}}) {
+                next if $reading eq 'state';
+                next if Gemini_IsBlacklisted($reading, @blacklist);
+                my $val = $dev->{READINGS}{$reading}{VAL} // '';
+                push @values, "$reading=$val";
+            }
+            $status .= " (" . join(', ', @values) . ")" if @values;
+        }
+        $status .= "\n";
+    }
+
+    return $status;
 }
 
 ##############################################################################
@@ -801,9 +868,10 @@ sub Gemini_GetControlDevices {
 }
 
 ##############################################################################
-# Hilfsfunktion: Gerätekontext für control-Befehl aufbauen (Alias-Mapping)
+# OPTIMIERT: Statischen Control-Kontext für Prompt Caching aufbauen
+# (Gerätestruktur mit set-Befehlen, ohne aktuelle Werte - wird gecacht)
 ##############################################################################
-sub Gemini_BuildControlContext {
+sub Gemini_BuildStaticControlContext {
     my ($hash) = @_;
     my $name = $hash->{NAME};
 
@@ -812,7 +880,7 @@ sub Gemini_BuildControlContext {
 
     my @blacklist = Gemini_GetBlacklist($hash);
 
-    my $context = "Verfuegbare Geraete zum Steuern:\n";
+    my $context = "Verfügbare Geräte zum Steuern:\n\n";
     for my $devName (@devices) {
         next unless exists $main::defs{$devName};
         my $alias = AttrVal($devName, 'alias', $devName);
@@ -823,19 +891,20 @@ sub Gemini_BuildControlContext {
         # Typ-Informationen (z.B. :slider,0,1,100) behalten, nur Blacklist-Eintraege filtern
         my @cmds;
         for my $entry (split(/\s+/, $setListRaw)) {
-            my ($cmdName) = split(/:/, $entry, 2);  # Befehlsname zum Filtern extrahieren
+            my ($cmdName) = split(/:/, $entry, 2);
             next unless $cmdName;
             next if Gemini_IsBlacklisted($cmdName, @blacklist);
-            push @cmds, $entry;                     # kompletten Eintrag inkl. :slider,... behalten
+            push @cmds, $entry;
         }
 
         my $cmdsStr       = @cmds ? join(', ', @cmds) : 'unbekannt';
         my $comment       = AttrVal($devName, 'comment', '');
         my $geminiComment = AttrVal($devName, $name . 'Comment', '');
-        $context .= "  $alias (intern: $devName)";
-        $context .= " -- Allgemeine Beschreibung: $comment" if $comment;
-        $context .= " -- Beschreibung für Gemini: $geminiComment" if $geminiComment;
-        $context .= " -- set-Befehle: $cmdsStr\n";
+        
+        $context .= "Gerät: $alias (intern: $devName)\n";
+        $context .= "  Allgemeine Beschreibung: $comment\n" if $comment;
+        $context .= "  Beschreibung für Gemini: $geminiComment\n" if $geminiComment;
+        $context .= "  Set-Befehle: $cmdsStr\n\n";
     }
 
     return $context;
@@ -934,14 +1003,14 @@ sub Gemini_RollbackControlSession {
     my $startIdx = $hash->{CONTROL_START_IDX} // 0;
     splice(@{$hash->{CHAT}}, $startIdx);
     delete $hash->{CONTROL_START_IDX};
-    delete $hash->{CHAT_EXTRA_CONTEXT};
+    delete $hash->{CHAT_INCLUDE_DEVICE_STATUS};
 }
 
 ##############################################################################
-# Control-Funktion: Gerät steuern via Function Calling
+# OPTIMIERT: Control-Funktion mit Prompt Caching
 ##############################################################################
 sub Gemini_SendControl {
-    my ($hash, $instruction, $extraContext) = @_;
+    my ($hash, $instruction, $includeDeviceStatus) = @_;
     my $name = $hash->{NAME};
 
     if (AttrVal($name, 'disable', 0)) {
@@ -961,18 +1030,30 @@ sub Gemini_SendControl {
     my $timeout    = AttrVal($name, 'timeout',    30);
     my $maxHistory = AttrVal($name, 'maxHistory', 20);
 
-    $hash->{CONTROL_START_IDX}  = scalar(@{$hash->{CHAT}});
-    $hash->{CHAT_EXTRA_CONTEXT} = $extraContext // '';
+    $hash->{CONTROL_START_IDX}           = scalar(@{$hash->{CHAT}});
+    $hash->{CHAT_INCLUDE_DEVICE_STATUS}  = $includeDeviceStatus;
+
+    # DYNAMISCHER Teil: aktueller Gerätestatus (falls gewünscht)
+    my @parts;
+    
+    if ($includeDeviceStatus) {
+        my $dynamicStatus = Gemini_BuildDynamicDeviceStatus($hash);
+        push @parts, { text => $dynamicStatus } if $dynamicStatus;
+    }
+
+    # Die eigentliche Anweisung
+    push @parts, { text => $instruction };
 
     push @{$hash->{CHAT}}, {
         role  => 'user',
-        parts => [{ text => $instruction }]
+        parts => \@parts
     };
 
     while (scalar(@{$hash->{CHAT}}) > $maxHistory) {
         shift @{$hash->{CHAT}};
         $hash->{CONTROL_START_IDX}-- if $hash->{CONTROL_START_IDX} > 0;
     }
+    
     # Ensure history starts with a valid user text turn (API requirement):
     # remove leading model turns and orphaned user functionResponse turns
     # (a functionResponse without a preceding functionCall is invalid)
@@ -1002,15 +1083,21 @@ sub Gemini_SendControl {
         tools    => Gemini_GetControlTools()
     );
 
-    my $systemPrompt   = AttrVal($name, 'systemPrompt', '');
-    my $controlContext = Gemini_BuildControlContext($hash);
+    # STATISCHER Teil für system_instruction (wird gecacht!)
+    my $systemPrompt         = AttrVal($name, 'systemPrompt', '');
+    my $staticControlContext = Gemini_BuildStaticControlContext($hash);
+    my $staticDeviceContext  = '';
+    
+    if ($includeDeviceStatus) {
+        $staticDeviceContext = Gemini_BuildStaticDeviceContext($hash);
+    }
 
     my $fullSystem = '';
-    $fullSystem .= $systemPrompt    if $systemPrompt;
-    $fullSystem .= "\n\n"           if $fullSystem && $controlContext;
-    $fullSystem .= $controlContext  if $controlContext;
-    $fullSystem .= "\n\n"           if $fullSystem && $extraContext;
-    $fullSystem .= $extraContext    if $extraContext;    
+    $fullSystem .= $systemPrompt if $systemPrompt;
+    $fullSystem .= "\n\n" if $systemPrompt && $staticDeviceContext;
+    $fullSystem .= $staticDeviceContext if $staticDeviceContext;
+    $fullSystem .= "\n\n" if $fullSystem && $staticControlContext;
+    $fullSystem .= $staticControlContext if $staticControlContext;
 
     if ($fullSystem) {
         $requestBody{system_instruction} = {
@@ -1135,7 +1222,7 @@ sub Gemini_HandleControlResponse {
     push @{$hash->{CHAT}}, $content;
 
     delete $hash->{CONTROL_START_IDX};
-    delete $hash->{CHAT_EXTRA_CONTEXT};
+    delete $hash->{CHAT_INCLUDE_DEVICE_STATUS};
 
     my $responseForReading = $responseUnicode;
     utf8::encode($responseForReading) if utf8::is_utf8($responseForReading);
@@ -1414,16 +1501,22 @@ sub Gemini_SendFunctionResults {
         tools    => Gemini_GetControlTools()
     );
 
-    my $systemPrompt   = AttrVal($name, 'systemPrompt', '');
-    my $extraContext   = $hash->{CHAT_EXTRA_CONTEXT} // '';
-    my $controlContext = Gemini_BuildControlContext($hash);
+    # STATISCHER Teil für system_instruction (wird gecacht!)
+    my $systemPrompt         = AttrVal($name, 'systemPrompt', '');
+    my $staticControlContext = Gemini_BuildStaticControlContext($hash);
+    my $staticDeviceContext  = '';
+    
+    my $includeDeviceStatus = $hash->{CHAT_INCLUDE_DEVICE_STATUS} // 0;
+    if ($includeDeviceStatus) {
+        $staticDeviceContext = Gemini_BuildStaticDeviceContext($hash);
+    }
 
     my $fullSystem = '';
-    $fullSystem .= $systemPrompt    if $systemPrompt;
-    $fullSystem .= "\n\n"           if $fullSystem && $extraContext;
-    $fullSystem .= $extraContext    if $extraContext;
-    $fullSystem .= "\n\n"           if $fullSystem && $controlContext;
-    $fullSystem .= $controlContext  if $controlContext;
+    $fullSystem .= $systemPrompt if $systemPrompt;
+    $fullSystem .= "\n\n" if $systemPrompt && $staticDeviceContext;
+    $fullSystem .= $staticDeviceContext if $staticDeviceContext;
+    $fullSystem .= "\n\n" if $fullSystem && $staticControlContext;
+    $fullSystem .= $staticControlContext if $staticControlContext;
 
     if ($fullSystem) {
         $requestBody{system_instruction} = {
