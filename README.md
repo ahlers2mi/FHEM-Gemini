@@ -399,7 +399,7 @@ attr global verbose 3
 
 ## Hinweise zu Kosten und Haftung
 
-Die Nutzung der Anthropic-Claude-API erfolgt auf eigene Verantwortung. Sämtliche durch die API-Nutzung entstehenden Kosten hängen von deinem individuellen Setup, den verwendeten Modellen, dem übermittelten Kontext sowie deinem Nutzungsverhalten ab und können im Einzelfall deutlich von den im README genannten Groborientierungen abweichen.
+Die Nutzung der Gemini-API erfolgt auf eigene Verantwortung. Sämtliche durch die API-Nutzung entstehenden Kosten hängen von deinem individuellen Setup, den verwendeten Modellen, dem übermittelten Kontext sowie deinem Nutzungsverhalten ab und können im Einzelfall deutlich von den im README genannten Groborientierungen abweichen.
 
 Weder das Open-Source-Community-Projekt FHEM noch dessen Mitwirkende oder der Autor dieses Moduls übernehmen eine Gewähr oder Haftung für entstehende API-Kosten, unerwartet hohen Tokenverbrauch, Fehlkonfigurationen, ungünstige Prompts, zu großen oder unnötigen Kontext, Fehler im Modul, Veränderungen an der externen API oder sonstige Umstände, die zu höherem Verbrauch oder zusätzlichen Kosten führen.
 
