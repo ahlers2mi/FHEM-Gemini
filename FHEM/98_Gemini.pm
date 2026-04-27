@@ -794,12 +794,9 @@ sub Gemini_BuildStaticDeviceContext {
         
         # GeminiComment hat Vorrang vor normalem comment
         my $geminiComment = AttrVal($devName, $name . 'Comment', '');
-        my $comment       = AttrVal($devName, 'comment', '');
         
         if ($geminiComment) {
             $context .= "|$geminiComment";
-        } elsif ($comment) {
-            $context .= "|$comment";
         }
         
         $context .= "\n";
