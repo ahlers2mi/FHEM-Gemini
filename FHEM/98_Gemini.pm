@@ -35,6 +35,9 @@
 #   readingFilterExtra - Zusaetzlich aktivierte Readings pro Geraet im Format
 #                        "device1:reading1,reading2 device2:reading3" (vom Widget verwaltet).
 #   maxReadingsPerDevice - Maximale Anzahl an Readings pro Geraet im Kontext (Standard: 20)
+#   lazyCommands - 0/1; wenn 1, werden set-Befehle nicht mehr im Initial-Prompt
+#                  mitgeschickt, sondern erst on-demand via get_device_commands
+#                  Tool-Call abgerufen (spart Tokens, kostet einen Roundtrip)
 #   safetySettings  - :BLOCK_NONE,BLOCK_ONLY_HIGH,BLOCK_MEDIUM_AND_ABOVE '
 #
 # Set-Befehle:
@@ -63,6 +66,14 @@
 ##############################################################################
 
 # Versionshistorie:
+# 4.2.0 - 2026-05-21  Neu: Token-Optimierungen aus FHEM-OpenRouter portiert -
+#                          kompaktes Pipe-Kontextformat in Gemini_BuildDeviceContext
+#                          und Gemini_BuildControlContext (Faktor ~3-5 weniger Tokens);
+#                          neue Hilfsfunktion Gemini_GetShortCmds liefert nur
+#                          Befehlsnamen (kein :slider, keine Peers/HomeMatic-Interna);
+#                          neues Attribut lazyCommands schaltet auf einen
+#                          on-demand get_device_commands Tool-Call um, sodass die
+#                          set-Befehle nicht mehr im Initial-Prompt mitgesendet werden
 # 4.1.0 - 2026-05-21  Neu: Reading-Filter Widget (FW_detailFn) mit Whitelist/Extra/Blacklist;
 #                          neue Attribute readingWhitelist, readingFilterExtra,
 #                          maxReadingsPerDevice; neue Set-Befehle collectReadings,
@@ -163,6 +174,7 @@ sub Gemini_Initialize {
         'model ' .
         'maxHistory:5,10,20,50,100 ' .
         'maxReadingsPerDevice ' .
+        'lazyCommands:0,1 ' .
         'timeout ' .
         'disable:0,1 ' .
         'disableHistory:0,1 ' .
@@ -193,7 +205,7 @@ sub Gemini_Define {
     my $name = $args[0];
     $hash->{NAME}        = $name;
     $hash->{CHAT}        = [];   # Chat-Verlauf als Array-Referenz
-    $hash->{VERSION}     = '4.1.0';
+    $hash->{VERSION}     = '4.2.0';
 
     readingsSingleUpdate($hash, 'state',             'initialized', 1);
     readingsSingleUpdate($hash, 'response',          '-',           0);
@@ -1238,25 +1250,26 @@ sub Gemini_BuildDeviceContext {
 
     return '' unless @devices;
 
-    my $context     = "Aktueller Status der Smart-Home Geräte:\n";
     my @blacklist   = Gemini_GetBlacklist($hash);
     my @whitelist   = Gemini_GetEffectiveWhitelist($hash);
     my %wlSet       = map { $_ => 1 } @whitelist;
     my %extraActive = Gemini_ParseReadingFilterExtra($hash);
     my $maxReadings = AttrVal($name, 'maxReadingsPerDevice', 20);
 
+    my $context  = "FHEM Geräte (Status):\n";
+    $context    .= "Format: internalName(alias)|type|state|r1=v1,r2=v2|comment\n";
+    $context    .= "WICHTIG: 'internalName' = exakter FHEM-Name fuer set-Befehle, niemals den alias verwenden.\n\n";
+
     for my $devName (@devices) {
         next unless exists $main::defs{$devName};
         my $dev   = $main::defs{$devName};
-        my $alias = AttrVal($devName, 'alias', $devName);
+        my $alias = AttrVal($devName, 'alias', '');
+        my $type  = $dev->{TYPE} // '?';
+        my $state = ReadingsVal($devName, 'state', '?');
 
-        Log3 $name, 5, "Gemini ($name): Alias " . $alias;
-
-        $context .= "\nGerät: $alias (intern: $devName)\n";
-        $context .= "  Typ: " . ($dev->{TYPE} // 'unbekannt') . "\n";
-
-        my $state = ReadingsVal($devName, 'state', 'unbekannt');
-        $context .= "  Status: $state\n";
+        $context .= $devName;
+        $context .= "($alias)" if $alias && $alias ne $devName;
+        $context .= "|$type|$state";
 
         if (exists $dev->{READINGS}) {
             my @readings = grep {
@@ -1267,27 +1280,26 @@ sub Gemini_BuildDeviceContext {
             my $truncated = scalar(@readings) > $maxReadings;
             @readings = @readings[0..$maxReadings-1] if $truncated;
 
-            if (@readings) {
-                $context .= "  Readings:\n";
-                for my $reading (@readings) {
-                    my $val  = $dev->{READINGS}{$reading}{VAL}  // '';
-                    my $time = $dev->{READINGS}{$reading}{TIME} // '';
-                    $context .= "    $reading: $val (Stand: $time)\n";
-                }
-                $context .= "    ... (weitere Readings gefiltert)\n" if $truncated;
+            my @pairs;
+            for my $reading (@readings) {
+                my $val = $dev->{READINGS}{$reading}{VAL} // '';
+                $val =~ s/[\r\n]+/ /g;
+                push @pairs, "$reading=$val";
             }
+            $context .= '|' . join(',', @pairs);
+            $context .= ',...' if $truncated;
+        } else {
+            $context .= '|';
         }
 
-        my @attributes = ('room', 'group', 'alias', 'comment', $hash->{NAME} . "Comment");
-
-        for my $attrName (@attributes) {
-            my $attrVal = AttrVal($devName, $attrName, '');
-            $context .= "  $attrName: $attrVal\n" if $attrVal;
-        }
-
-        Log3 $name, 5, "Gemini ($name): " . $alias . ": " . $context;
+        my $comment       = AttrVal($devName, 'comment', '');
+        my $geminiComment = AttrVal($devName, $name . 'Comment', '');
+        my $cm = $geminiComment || $comment;
+        $context .= "|$cm" if $cm;
+        $context .= "\n";
     }
 
+    $context .= "\nNutze get_device_state(<internalName>) fuer aktuelle Einzelwerte.\n";
     return $context;
 }
 
@@ -1334,6 +1346,53 @@ sub Gemini_GetControlDevices {
 }
 
 ##############################################################################
+# Hilfsfunktion: Kurze Befehlsliste fuer ein Geraet (nur Namen, keine Werte/Peers)
+##############################################################################
+sub Gemini_GetShortCmds {
+    my ($devName, $blacklistRef) = @_;
+
+    my $setListRaw = main::getAllSets($devName) // '';
+
+    my %skipCmds = map { $_ => 1 } qw(
+        HASH noArg attrTemplate
+        peerSmart peerIODev peerBulk regSet regBulk getRegRaw
+        deviceRename fwUpdate assignHmKey getDevInfo getVersion
+        getConfig statusRequest pair unpair pressS pressL press
+        toggleDir inhibit sign raw reset clear eventS eventL
+        tplSet associate deassociate
+        wakeUp factoryReset groupid fakeShutterContact fakeWallThermostat
+        saveConfig weekProfile restoreReadings restoreDevice
+        windowOpenDuration decalcification maxValveSetting valveOffset
+        boostValveposition measurementOffset
+        rawCommand channelVolume FactoryDefaults
+        tunerPresetMemory presetMemory presetCall favoriteList usedInputs
+        updateStatus statusUpdateInterval updateCurrentPosition
+        updateLimitation limitationClear limitationMin limitationMax
+        limitationUpdateInterval execution
+        intervals blink
+    );
+
+    my %seen;
+    my @cmdNames;
+
+    for my $entry (split(/\s+/, $setListRaw)) {
+        my ($cmdName) = split(/:/, $entry, 2);
+        next unless defined $cmdName && $cmdName ne '' && $cmdName ne '?';
+        next if $skipCmds{$cmdName};
+        next if $cmdName =~ /^tplSet_/;
+        next if $seen{$cmdName}++;
+
+        if ($blacklistRef && @$blacklistRef) {
+            next if Gemini_IsBlacklisted($cmdName, @$blacklistRef);
+        }
+
+        push @cmdNames, $cmdName;
+    }
+
+    return join(',', @cmdNames);
+}
+
+##############################################################################
 # Hilfsfunktion: Gerätekontext für control-Befehl aufbauen (Alias-Mapping)
 ##############################################################################
 sub Gemini_BuildControlContext {
@@ -1344,31 +1403,37 @@ sub Gemini_BuildControlContext {
     return '' unless @devices;
 
     my @blacklist = Gemini_GetBlacklist($hash);
+    my $lazyCmds  = AttrVal($name, 'lazyCommands', 0);
 
-    my $context = "Verfuegbare Geraete zum Steuern:\n";
+    my $context = "Steuerbare FHEM-Geraete:\n";
+    if ($lazyCmds) {
+        $context .= "Format: internalName(alias)|type|comment\n";
+        $context .= "Befehle nicht inline - vor set_device IMMER get_device_commands(<internalName>) aufrufen.\n\n";
+    } else {
+        $context .= "Format: internalName(alias)|type|cmd1,cmd2,...|comment\n";
+        $context .= "WICHTIG: 'internalName' = exakter FHEM-Name fuer set-Befehle, niemals den alias verwenden.\n\n";
+    }
+
     for my $devName (@devices) {
         next unless exists $main::defs{$devName};
-        my $alias = AttrVal($devName, 'alias', $devName);
+        my $dev   = $main::defs{$devName};
+        my $alias = AttrVal($devName, 'alias', '');
+        my $type  = $dev->{TYPE} // '?';
 
-        # Set-Befehle ermitteln (getAllSets liefert auch dynamisch berechnete Befehle)
-        my $setListRaw = main::getAllSets($devName) // '';
+        $context .= $devName;
+        $context .= "($alias)" if $alias && $alias ne $devName;
+        $context .= "|$type";
 
-        # Typ-Informationen (z.B. :slider,0,1,100) behalten, nur Blacklist-Eintraege filtern
-        my @cmds;
-        for my $entry (split(/\s+/, $setListRaw)) {
-            my ($cmdName) = split(/:/, $entry, 2);  # Befehlsname zum Filtern extrahieren
-            next unless $cmdName;
-            next if Gemini_IsBlacklisted($cmdName, @blacklist);
-            push @cmds, $entry;                     # kompletten Eintrag inkl. :slider,... behalten
+        unless ($lazyCmds) {
+            my $cmds = Gemini_GetShortCmds($devName, \@blacklist);
+            $context .= "|$cmds";
         }
 
-        my $cmdsStr       = @cmds ? join(', ', @cmds) : 'unbekannt';
         my $comment       = AttrVal($devName, 'comment', '');
         my $geminiComment = AttrVal($devName, $name . 'Comment', '');
-        $context .= "  $alias (intern: $devName)";
-        $context .= " -- Allgemeine Beschreibung: $comment" if $comment;
-        $context .= " -- Beschreibung für Gemini: $geminiComment" if $geminiComment;
-        $context .= " -- set-Befehle: $cmdsStr\n";
+        my $cm = $geminiComment || $comment;
+        $context .= "|$cm" if $cm;
+        $context .= "\n";
     }
 
     return $context;
@@ -1378,8 +1443,10 @@ sub Gemini_BuildControlContext {
 # Hilfsfunktion: Tool-Definitionen für Function Calling zurückgeben
 ##############################################################################
 sub Gemini_GetControlTools {
-    return [{
-        function_declarations => [
+    my ($hash) = @_;
+    my $lazyCmds = $hash ? AttrVal($hash->{NAME}, 'lazyCommands', 0) : 0;
+
+    my @decls = (
             {
                 name        => 'set_device',
                 description => 'Führt einen FHEM set-Befehl auf einem Gerät aus, z.B. on, off oder einen numerischen Wert. Kann parallel mehrfach aufgerufen werden, um mehrere Geräte gleichzeitig zu schalten.',
@@ -1447,16 +1514,31 @@ sub Gemini_GetControlTools {
                             type => 'string', 
                             description => 'Der set-Befehl, keine Verkettung von Befehlen, du kannst mehrere create_notify_device aufrufen, Wichtig: Verwende ausschließlich den exakten FHEM-Gerätenamen (den Namen, der in der FHEM-Geräteliste steht), niemals den Alias oder einen geschätzten Namen. Syntax: set <GERÄTENAME> <PARAMETER> <WERT> bzw. set <GERÄTENAME> <WERT>'  
                         },
-                        one_shot    => { 
-                            type => 'boolean', 
-                            description => 'true für einmalige Reaktion (löscht sich nach Ausführung selbst), false für permanente Event-Überwachung. Standard: true' 
+                        one_shot    => {
+                            type => 'boolean',
+                            description => 'true für einmalige Reaktion (löscht sich nach Ausführung selbst), false für permanente Event-Überwachung. Standard: true'
                         }
                     },
                     required => ['device_name', 'event_spec', 'command']
                 }
             }
-        ]
-    }];
+    );
+
+    if ($lazyCmds) {
+        push @decls, {
+            name        => 'get_device_commands',
+            description => 'Liefert die vollstaendige Liste der set-Befehle (inkl. :slider/:colorpicker/...) fuer ein steuerbares Geraet. IMMER vor set_device aufrufen, wenn die genaue Befehlssyntax nicht aus dem Kontext bekannt ist.',
+            parameters  => {
+                type       => 'object',
+                properties => {
+                    device => { type => 'string', description => 'FHEM Geraetename (intern)' }
+                },
+                required => ['device']
+            }
+        };
+    }
+
+    return [{ function_declarations => \@decls }];
 }
 
 ##############################################################################
@@ -1532,7 +1614,7 @@ sub Gemini_SendControl {
 
     my %requestBody = (
         contents => $contentsToSend,
-        tools    => Gemini_GetControlTools()
+        tools    => Gemini_GetControlTools($hash)
     );
 
     my $systemPrompt   = AttrVal($name, 'systemPrompt', '');
@@ -1745,6 +1827,19 @@ sub Gemini_ExecuteFunctionCall {
             return $errMsg;
         }
 
+    } elsif ($fcName eq 'get_device_commands') {
+        my $device = $args->{device} // '';
+        return "Fehler: Geraet '$device' nicht gefunden"
+            unless exists $main::defs{$device};
+
+        my %allowed = map { $_ => 1 } Gemini_GetControlDevices($hash);
+        return "Fehler: Geraet '$device' nicht in controlList/controlRoom"
+            unless $allowed{$device};
+
+        my $setListRaw = main::getAllSets($device) // '';
+        Log3 $name, 4, "Gemini ($name): get_device_commands($device)";
+        return "Verfuegbare set-Befehle fuer $device:\n$setListRaw";
+
     } elsif ($fcName eq 'get_device_state') {
         my $device = $args->{device} // '';
 
@@ -1948,7 +2043,7 @@ sub Gemini_SendFunctionResults {
 
     my %requestBody = (
         contents => $contentsToSend,
-        tools    => Gemini_GetControlTools()
+        tools    => Gemini_GetControlTools($hash)
     );
 
     my $systemPrompt   = AttrVal($name, 'systemPrompt', '');
@@ -2064,6 +2159,12 @@ sub Gemini_SendFunctionResult {
       Reading-Filter Widget auf der Detailseite gepflegt.</li>
     <li><b>maxReadingsPerDevice</b> - Maximale Anzahl an Readings pro Geraet, die in den
       Kontext aufgenommen werden (Standard: 20).</li>
+    <li><b>lazyCommands</b> - 0/1 (Standard: 0). Wenn 1, werden die set-Befehle der
+      steuerbaren Geraete <b>nicht</b> mehr im Initial-Prompt mitgeschickt. Stattdessen
+      erhaelt Gemini ein zusaetzliches Tool <code>get_device_commands</code> und holt
+      sich die volle Befehlsliste nur fuer Geraete, die es konkret schalten will.
+      Spart Tokens (besonders bei vielen HomeMatic-/MAX-/HUE-Geraeten mit langen
+      Befehlslisten), kostet aber einen zusaetzlichen API-Roundtrip pro Geraet.</li>
   </ul><br>
 
   <b>Reading-Filter Widget</b><br>
