@@ -30,7 +30,12 @@
 #                      uebermittelt werden; Wildcards (*) werden unterstuetzt.
 #                      Standard: attrTemplate associate R-* RegL_* associatedWith peerListRDate
 #                                protLastRcv lastTimeSync lastcmd Heap LoadAvg Uptime Wifi_*
-#   safetySettings  - :BLOCK_NONE,BLOCK_ONLY_HIGH,BLOCK_MEDIUM_AND_ABOVE ' 
+#   readingWhitelist - Leerzeichen-/komma-getrennte Liste von Readings, die immer
+#                      an Gemini uebermittelt werden (Standard-Whitelist wenn nicht gesetzt).
+#   readingFilterExtra - Zusaetzlich aktivierte Readings pro Geraet im Format
+#                        "device1:reading1,reading2 device2:reading3" (vom Widget verwaltet).
+#   maxReadingsPerDevice - Maximale Anzahl an Readings pro Geraet im Kontext (Standard: 20)
+#   safetySettings  - :BLOCK_NONE,BLOCK_ONLY_HIGH,BLOCK_MEDIUM_AND_ABOVE '
 #
 # Set-Befehle:
 #   ask <Frage>                    - Textfrage stellen
@@ -40,6 +45,9 @@
 #                                    und Steuerung in einem (ideal fuer Telegram-Integration)
 #   control <Anweisung>            - Gemini steuert Geräte via Function Calling
 #   resetChat                      - Chat-Verlauf löschen
+#   collectReadings                - Bekannte Readings aller Geraete fuer das Filter-Widget einsammeln
+#   readingFilterToggle <dev> <reading> enable|disable - Reading global ein-/ausschalten
+#   readingExtraToggle  <dev> <reading> enable|disable - Reading zusaetzlich aktivieren/deaktivieren
 #
 # Lesewerte (Readings):
 #   response           - Letzte Antwort von Gemini (Roh-Markdown)
@@ -55,6 +63,12 @@
 ##############################################################################
 
 # Versionshistorie:
+# 4.1.0 - 2026-05-21  Neu: Reading-Filter Widget (FW_detailFn) mit Whitelist/Extra/Blacklist;
+#                          neue Attribute readingWhitelist, readingFilterExtra,
+#                          maxReadingsPerDevice; neue Set-Befehle collectReadings,
+#                          readingFilterToggle, readingExtraToggle; Filter wirkt in
+#                          Gemini_BuildDeviceContext, Gemini_BuildControlContext und
+#                          get_device_state
 # 4.0.2 - 2026-04-27  Neu: Optimierung Prompt caching
 # 4.0.1 - 2026-04-21  Neu: Attribut safetySettings zur Steuerung der Inhaltsfilterung (Vermeidung von False-Positives bei der Bildanalyse)
 #                          - safetySettings
@@ -138,15 +152,17 @@ use MIME::Base64;
 sub Gemini_Initialize {
     my ($hash) = @_; 
 
-    $hash->{DefFn}      = 'Gemini_Define';
-    $hash->{UndefFn}    = 'Gemini_Undefine';
-    $hash->{SetFn}      = 'Gemini_Set';
-    $hash->{GetFn}      = 'Gemini_Get';
-    $hash->{AttrFn}     = 'Gemini_Attr';
-    $hash->{AttrList}   =
+    $hash->{DefFn}       = 'Gemini_Define';
+    $hash->{UndefFn}     = 'Gemini_Undefine';
+    $hash->{SetFn}       = 'Gemini_Set';
+    $hash->{GetFn}       = 'Gemini_Get';
+    $hash->{AttrFn}      = 'Gemini_Attr';
+    $hash->{FW_detailFn} = 'Gemini_FW_detail';
+    $hash->{AttrList}    =
         'apiKey ' .
         'model ' .
         'maxHistory:5,10,20,50,100 ' .
+        'maxReadingsPerDevice ' .
         'timeout ' .
         'disable:0,1 ' .
         'disableHistory:0,1 ' .
@@ -158,6 +174,8 @@ sub Gemini_Initialize {
         'safetySettings:BLOCK_NONE,BLOCK_ONLY_HIGH,BLOCK_MEDIUM_AND_ABOVE ' .
         'systemPrompt:textField-long ' .
         'readingBlacklist:textField-long ' .
+        'readingWhitelist:textField-long ' .
+        'readingFilterExtra:textField-long ' .
         $readingFnAttributes;
 
     return undef;
@@ -175,7 +193,7 @@ sub Gemini_Define {
     my $name = $args[0];
     $hash->{NAME}        = $name;
     $hash->{CHAT}        = [];   # Chat-Verlauf als Array-Referenz
-    $hash->{VERSION}     = '4.0.2';
+    $hash->{VERSION}     = '4.1.0';
 
     readingsSingleUpdate($hash, 'state',             'initialized', 1);
     readingsSingleUpdate($hash, 'response',          '-',           0);
@@ -197,9 +215,17 @@ sub Gemini_Undefine {
 }
 
 sub Gemini_Attr {
-    my ($cmd, $name, $attr, $value) = @_; 
+    my ($cmd, $name, $attr, $value) = @_;
     if ($attr eq 'timeout') {
         return "timeout must be a positive number" unless ($value =~ /^\d+$/ && $value > 0);
+    }
+    if ($attr eq 'maxReadingsPerDevice') {
+        return "maxReadingsPerDevice must be a positive number"
+            unless ($value =~ /^\d+$/ && $value > 0);
+    }
+    if ($attr =~ /^(?:deviceList|deviceRoom|controlList|controlRoom|readingBlacklist|readingWhitelist|readingFilterExtra)$/) {
+        my $hash = $main::defs{$name};
+        delete $hash->{helper}{knownReadings} if $hash;
     }
     return undef;
 }
@@ -257,8 +283,31 @@ sub Gemini_Set {
         Log3 $name, 3, "Gemini ($name): Chat-Verlauf zurückgesetzt";
         return undef;
 
+    } elsif ($cmd eq 'collectReadings') {
+        Gemini_CollectAllReadings($hash);
+        my $count = 0;
+        for my $dev (keys %{$hash->{helper}{knownReadings} // {}}) {
+            $count += scalar keys %{$hash->{helper}{knownReadings}{$dev}};
+        }
+        readingsSingleUpdate($hash, 'state', "collected $count readings", 1);
+        return undef;
+
+    } elsif ($cmd eq 'readingFilterToggle') {
+        return "Usage: set $name readingFilterToggle <device> <reading> enable|disable"
+            unless @args == 3;
+        my ($dev, $reading, $action) = @args;
+        Gemini_ToggleReadingFilter($hash, $dev, $reading, $action eq 'disable' ? 1 : 0);
+        return undef;
+
+    } elsif ($cmd eq 'readingExtraToggle') {
+        return "Usage: set $name readingExtraToggle <device> <reading> enable|disable"
+            unless @args == 3;
+        my ($dev, $reading, $action) = @args;
+        Gemini_ToggleReadingFilterExtra($hash, $dev, $reading, $action eq 'enable' ? 1 : 0);
+        return undef;
+
     } else {
-        return "Unknown argument $cmd, choose one of ask:textField askWithImage:textField askAboutDevices:textField chat:textField control:textField resetChat:noArg";
+        return "Unknown argument $cmd, choose one of ask:textField askWithImage:textField askAboutDevices:textField chat:textField control:textField resetChat:noArg collectReadings:noArg";
     }
 }
 
@@ -655,6 +704,477 @@ sub Gemini_GlobMatch {
 }
 
 ##############################################################################
+# Standard-Whitelist fuer Readings
+##############################################################################
+sub Gemini_GetDefaultWhitelist {
+    return qw(
+        state
+        temperature humidity
+        brightness dim level
+        power energy voltage current
+        motion contact presence
+        battery batteryLevel
+        setpoint desiredTemp measuredTemp valvePosition
+        wind rain
+        lock
+        color colorTemperature
+        volume mute
+        mode
+    );
+}
+
+##############################################################################
+# Effektive Whitelist (Attribut oder Default)
+##############################################################################
+sub Gemini_GetEffectiveWhitelist {
+    my ($hash) = @_;
+    my $attr = AttrVal($hash->{NAME}, 'readingWhitelist', '');
+    return split(/[\s,]+/, $attr) if $attr ne '';
+    return Gemini_GetDefaultWhitelist();
+}
+
+##############################################################################
+# readingFilterExtra parsen: "dev1:r1,r2 dev2:r3" -> { dev => { r => 1 } }
+##############################################################################
+sub Gemini_ParseReadingFilterExtra {
+    my ($hash) = @_;
+    my $attr = AttrVal($hash->{NAME}, 'readingFilterExtra', '');
+
+    my %extra;
+    return %extra unless $attr;
+
+    $attr =~ s/[\r\n\t]+/ /g;
+    $attr =~ s/\s+/ /g;
+    $attr =~ s/^\s+|\s+$//g;
+
+    my @tokens;
+    while ($attr =~ /([A-Za-z0-9_\-\.]+:[^\s]+)/g) {
+        push @tokens, $1;
+    }
+
+    for my $token (@tokens) {
+        next unless $token =~ /^([^:]+):(.+)$/;
+        my ($dev, $readings) = ($1, $2);
+        $readings =~ s/[,\s]+$//;
+        for my $r (split(/,/, $readings)) {
+            $r =~ s/^\s+|\s+$//g;
+            $extra{$dev}{$r} = 1 if $r ne '';
+        }
+    }
+    return %extra;
+}
+
+##############################################################################
+# readingFilterExtra aktualisieren (vom Widget aufgerufen)
+##############################################################################
+sub Gemini_ToggleReadingFilterExtra {
+    my ($hash, $devName, $reading, $enable) = @_;
+    my $name = $hash->{NAME};
+
+    my %extra = Gemini_ParseReadingFilterExtra($hash);
+
+    if ($enable) {
+        $extra{$devName}{$reading} = 1;
+    } else {
+        delete $extra{$devName}{$reading};
+        delete $extra{$devName} unless %{$extra{$devName} // {}};
+    }
+
+    my @parts;
+    for my $dev (sort keys %extra) {
+        my @readings = sort keys %{$extra{$dev}};
+        push @parts, "$dev:" . join(',', @readings) if @readings;
+    }
+
+    my $newAttr = join(' ', @parts);
+    if ($newAttr) {
+        CommandAttr(undef, "$name readingFilterExtra $newAttr");
+    } else {
+        CommandDeleteAttr(undef, "$name readingFilterExtra");
+    }
+    return;
+}
+
+##############################################################################
+# readingBlacklist um einen Eintrag erweitern/entfernen
+##############################################################################
+sub Gemini_ToggleReadingFilter {
+    my ($hash, $devName, $reading, $disable) = @_;
+    my $name = $hash->{NAME};
+
+    my @current = Gemini_GetBlacklist($hash);
+    my %set     = map { $_ => 1 } @current;
+
+    if ($disable) {
+        $set{$reading} = 1;
+    } else {
+        delete $set{$reading};
+    }
+
+    my $newAttr = join(' ', sort keys %set);
+    if ($newAttr) {
+        CommandAttr(undef, "$name readingBlacklist $newAttr");
+    } else {
+        CommandDeleteAttr(undef, "$name readingBlacklist");
+    }
+    return;
+}
+
+##############################################################################
+# Zentraler Filter: Wird ein Reading an Gemini gesendet?
+##############################################################################
+sub Gemini_IsFiltered {
+    my ($hash, $devName, $reading, $whitelistRef, $extraRef, $blacklistRef) = @_;
+
+    return 1 if Gemini_IsBlacklisted($reading, @$blacklistRef);
+    return 0 if $whitelistRef->{$reading};
+    return 0 if exists $extraRef->{'*'}{$reading};
+    return 0 if exists $extraRef->{$devName}{$reading};
+    return 1;
+}
+
+##############################################################################
+# Alle bekannten Readings der konfigurierten Geraete einsammeln
+##############################################################################
+sub Gemini_CollectAllReadings {
+    my ($hash) = @_;
+
+    my %seen;
+    my @allDevices = (Gemini_GetDeviceList($hash), Gemini_GetControlDevices($hash));
+
+    for my $devName (@allDevices) {
+        next if $seen{$devName}++;
+        next unless exists $main::defs{$devName};
+        my $dev = $main::defs{$devName};
+        next unless exists $dev->{READINGS};
+        for my $reading (sort keys %{$dev->{READINGS}}) {
+            $hash->{helper}{knownReadings}{$devName}{$reading} = 1;
+        }
+    }
+    return;
+}
+
+##############################################################################
+# Geraeteliste aus deviceList/deviceRoom (Helper fuer Widget)
+##############################################################################
+sub Gemini_GetDeviceList {
+    my ($hash) = @_;
+    my $name = $hash->{NAME};
+
+    my %seen;
+    my @devices;
+
+    my $deviceRoom = AttrVal($name, 'deviceRoom', '');
+    if ($deviceRoom) {
+        my @rooms = split(/\s*,\s*/, $deviceRoom);
+        for my $devName (sort keys %main::defs) {
+            my $devRoomAttr = AttrVal($devName, 'room', '');
+            for my $room (@rooms) {
+                if (grep { $_ eq $room } split(/\s*,\s*/, $devRoomAttr)) {
+                    push @devices, $devName unless $seen{$devName}++;
+                    last;
+                }
+            }
+        }
+    }
+
+    my $devList = AttrVal($name, 'deviceList', '');
+    if ($devList) {
+        for my $devName (split(/\s*,\s*/, $devList)) {
+            push @devices, $devName unless $seen{$devName}++;
+        }
+    }
+
+    return @devices;
+}
+
+##############################################################################
+# CSS fuer das Reading-Filter Widget
+##############################################################################
+my $Gemini_CSS = <<'END_CSS';
+/* Gemini Reading-Filter Widget */
+#gemini_rf_widget {
+    margin: 10px 0;
+    padding: 10px;
+    border: 1px solid #555555;
+    border-radius: 4px;
+    background: #2a2a2a;
+    color: #cccccc;
+    font-size: 12px;
+    box-sizing: border-box;
+    max-width: 100%;
+    overflow: hidden;
+}
+#gemini_rf_widget b {
+    color: #eeeeee;
+    font-size: 13px;
+}
+#gemini_rf_widget small {
+    color: #aaaaaa;
+}
+#gemini_rf_widget details {
+    margin-bottom: 6px;
+    max-width: 100%;
+    overflow: hidden;
+}
+#gemini_rf_widget summary {
+    cursor: pointer;
+    font-weight: bold;
+    color: #dddddd;
+    padding: 3px 0;
+    user-select: none;
+}
+#gemini_rf_widget summary:hover {
+    color: #ffffff;
+}
+#gemini_rf_widget .gm-label-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    max-width: 100%;
+    margin-bottom: 6px;
+    box-sizing: border-box;
+}
+#gemini_rf_widget label {
+    display: inline-flex !important;
+    align-items: center;
+    width: 180px;
+    max-width: 180px;
+    box-sizing: border-box;
+    padding: 3px 6px;
+    border-radius: 3px;
+    color: #cccccc !important;
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: default;
+}
+#gemini_rf_widget label.gm-wl {
+    background: #1a3a1a !important;
+    border: 1px solid #2a5a2a;
+    color: #88cc88 !important;
+}
+#gemini_rf_widget label.gm-extra {
+    background: #1a2a3a !important;
+    border: 1px solid #2a4a6a;
+    color: #88aacc !important;
+    cursor: pointer;
+}
+#gemini_rf_widget label.gm-inactive {
+    background: #333333 !important;
+    border: 1px solid #444444;
+    color: #aaaaaa !important;
+    cursor: pointer;
+}
+#gemini_rf_widget label.gm-bl {
+    background: #3a1a1a !important;
+    border: 1px solid #5a2a2a;
+    color: #cc8888 !important;
+}
+#gemini_rf_widget input[type="checkbox"] {
+    accent-color: #4a9eff;
+    margin-right: 4px;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+#gemini_rf_widget .gm-section-title {
+    color: #aaddff;
+    font-weight: bold;
+    margin: 6px 0 3px 0;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    width: 100%;
+}
+#dashboard .dashboard_widgetheader {
+    box-shadow: 2px 2px 4px rgba(0,0,0,0.5) !important;
+    overflow: visible !important;
+}
+END_CSS
+
+##############################################################################
+# CSS in die Seite injizieren (einmalig per ID-Check)
+##############################################################################
+sub Gemini_InjectCSS {
+    (my $cssEscaped = $Gemini_CSS) =~ s/\\/\\\\/g;
+    $cssEscaped =~ s/'/\\'/g;
+    $cssEscaped =~ s/\n/\\n/g;
+
+    return <<"END_INJECT";
+<script>
+(function(){
+    if (document.getElementById('gemini-module-css')) return;
+    var s = document.createElement('style');
+    s.id = 'gemini-module-css';
+    s.textContent = '$cssEscaped';
+    document.head.appendChild(s);
+})();
+</script>
+END_INJECT
+}
+
+##############################################################################
+# HTML-Sonderzeichen escapen
+##############################################################################
+sub Gemini_HtmlEsc {
+    my ($text) = @_;
+    return '' unless defined $text;
+    $text =~ s/&/&amp;/g;
+    $text =~ s/</&lt;/g;
+    $text =~ s/>/&gt;/g;
+    $text =~ s/"/&quot;/g;
+    $text =~ s/'/&#39;/g;
+    return $text;
+}
+
+##############################################################################
+# FW_detailFn: Reading-Filter Widget auf der Detailseite anzeigen
+##############################################################################
+sub Gemini_FW_detail {
+    my ($FW_wname, $devName, $room, $pageHash) = @_;
+
+    return '' unless exists $main::defs{$devName};
+    my $hash = $main::defs{$devName};
+    return '' unless $hash->{TYPE} eq 'Gemini';
+
+    Gemini_CollectAllReadings($hash);
+
+    my %extraActive = Gemini_ParseReadingFilterExtra($hash);
+    my @whitelist   = Gemini_GetEffectiveWhitelist($hash);
+    my %wlSet       = map { $_ => 1 } @whitelist;
+    my @blacklist   = Gemini_GetBlacklist($hash);
+    my $knownRef    = $hash->{helper}{knownReadings} // {};
+
+    return '' unless %$knownRef;
+
+    my $name = $devName;
+    my $html = Gemini_InjectCSS();
+
+    $html .= '<div id="gemini_rf_widget">';
+    $html .= '<b>Reading-Filter</b> ';
+    $html .= '<small>';
+    $html .= '&nbsp;&#128994;&nbsp;Whitelist&nbsp;';
+    $html .= '&nbsp;&#128998;&nbsp;Aktiviert&nbsp;';
+    $html .= '&nbsp;&#11036;&nbsp;Deaktiviert&nbsp;';
+    $html .= '&nbsp;&#128683;&nbsp;Blacklist';
+    $html .= '</small><br><br>';
+
+    for my $dev (sort keys %$knownRef) {
+        my @allReadings = sort keys %{$knownRef->{$dev}};
+        next unless @allReadings;
+
+        my (@inWhitelist, @inExtra, @inactive, @blacklisted);
+        for my $r (@allReadings) {
+            if (Gemini_IsBlacklisted($r, @blacklist)) {
+                push @blacklisted, $r;
+            } elsif ($wlSet{$r}) {
+                push @inWhitelist, $r;
+            } elsif (exists $extraActive{$dev}{$r} || exists $extraActive{'*'}{$r}) {
+                push @inExtra, $r;
+            } else {
+                push @inactive, $r;
+            }
+        }
+
+        my $activeCount = scalar(@inWhitelist) + scalar(@inExtra);
+
+        $html .= '<details style="margin-bottom:5px;max-width:100%;">';
+        $html .= sprintf(
+            '<summary>%s <span style="font-weight:normal;color:#999">(%d aktiv von %d)</span></summary>',
+            Gemini_HtmlEsc($dev), $activeCount, scalar(@allReadings)
+        );
+        $html .= '<div style="margin:5px 0 5px 15px;max-width:100%;overflow:hidden;">';
+
+        if (@inWhitelist) {
+            $html .= '<div class="gm-section-title">Whitelist (immer aktiv):</div>';
+            $html .= '<div class="gm-label-group">';
+            for my $r (@inWhitelist) {
+                $html .= sprintf(
+                    '<label class="gm-wl" title="%s">&#10003;&nbsp;%s</label>',
+                    Gemini_HtmlEsc($r), Gemini_HtmlEsc($r)
+                );
+            }
+            $html .= '</div>';
+        }
+
+        if (@inExtra) {
+            $html .= '<div class="gm-section-title">Zusaetzlich aktiv:</div>';
+            $html .= '<div class="gm-label-group">';
+            for my $r (@inExtra) {
+                (my $cbId = "rfe_${dev}_${r}") =~ s/[^a-zA-Z0-9_]/_/g;
+                $html .= sprintf(
+                    '<label class="gm-extra" title="%s">'
+                  . '<input type="checkbox" id="%s" checked '
+                  . 'onchange="gemini_extra_change(\'%s\',\'%s\',\'%s\',this.checked)">'
+                  . '%s</label>',
+                    Gemini_HtmlEsc($r), $cbId,
+                    Gemini_HtmlEsc($name), Gemini_HtmlEsc($dev), Gemini_HtmlEsc($r),
+                    Gemini_HtmlEsc($r)
+                );
+            }
+            $html .= '</div>';
+        }
+
+        if (@inactive) {
+            $html .= '<div class="gm-section-title">Nicht aktiv:</div>';
+            $html .= '<div class="gm-label-group">';
+            for my $r (@inactive) {
+                (my $cbId = "rfe_${dev}_${r}") =~ s/[^a-zA-Z0-9_]/_/g;
+                $html .= sprintf(
+                    '<label class="gm-inactive" title="%s">'
+                  . '<input type="checkbox" id="%s" '
+                  . 'onchange="gemini_extra_change(\'%s\',\'%s\',\'%s\',this.checked)">'
+                  . '%s</label>',
+                    Gemini_HtmlEsc($r), $cbId,
+                    Gemini_HtmlEsc($name), Gemini_HtmlEsc($dev), Gemini_HtmlEsc($r),
+                    Gemini_HtmlEsc($r)
+                );
+            }
+            $html .= '</div>';
+        }
+
+        if (@blacklisted) {
+            $html .= '<div class="gm-section-title">Blacklist (gefiltert):</div>';
+            $html .= '<div class="gm-label-group">';
+            for my $r (@blacklisted) {
+                $html .= sprintf(
+                    '<label class="gm-bl" title="%s">&#128683;&nbsp;%s</label>',
+                    Gemini_HtmlEsc($r), Gemini_HtmlEsc($r)
+                );
+            }
+            $html .= '</div>';
+        }
+
+        $html .= '</div></details>';
+    }
+
+    $html .= '</div>';
+
+    $html .= <<'JSEND';
+<script>
+function gemini_extra_change(gmName, devName, reading, isChecked) {
+    var action = isChecked ? 'enable' : 'disable';
+    var cmd = 'set ' + gmName + ' readingExtraToggle ' + devName + ' ' + reading + ' ' + action;
+    FW_cmd(FW_root + '?XHR=1&cmd=' + encodeURIComponent(cmd), function(resp) {
+        var cbId = 'rfe_' + devName + '_' + reading;
+        cbId = cbId.replace(/[^a-zA-Z0-9_]/g, '_');
+        var el = document.getElementById(cbId);
+        if (el) {
+            var label = el.parentElement;
+            label.className = isChecked ? 'gm-extra' : 'gm-inactive';
+            label.style.outline = '2px solid #4a9eff';
+            setTimeout(function(){ label.style.outline = ''; }, 600);
+        }
+    });
+}
+</script>
+JSEND
+
+    return $html;
+}
+
+##############################################################################
 # Hilfsfunktion: Raum für Automation-Geräte ermitteln
 ##############################################################################
 sub Gemini_GetAutomationRoom {
@@ -718,8 +1238,12 @@ sub Gemini_BuildDeviceContext {
 
     return '' unless @devices;
 
-    my $context  = "Aktueller Status der Smart-Home Geräte:\n";
-    my @blacklist = Gemini_GetBlacklist($hash);
+    my $context     = "Aktueller Status der Smart-Home Geräte:\n";
+    my @blacklist   = Gemini_GetBlacklist($hash);
+    my @whitelist   = Gemini_GetEffectiveWhitelist($hash);
+    my %wlSet       = map { $_ => 1 } @whitelist;
+    my %extraActive = Gemini_ParseReadingFilterExtra($hash);
+    my $maxReadings = AttrVal($name, 'maxReadingsPerDevice', 20);
 
     for my $devName (@devices) {
         next unless exists $main::defs{$devName};
@@ -735,13 +1259,22 @@ sub Gemini_BuildDeviceContext {
         $context .= "  Status: $state\n";
 
         if (exists $dev->{READINGS}) {
-            $context .= "  Readings:\n";
-            for my $reading (sort keys %{$dev->{READINGS}}) {
-                next if $reading eq 'state';
-                next if Gemini_IsBlacklisted($reading, @blacklist);
-                my $val  = $dev->{READINGS}{$reading}{VAL}  // '';
-                my $time = $dev->{READINGS}{$reading}{TIME} // '';
-                $context .= "    $reading: $val (Stand: $time)\n";
+            my @readings = grep {
+                $_ ne 'state' &&
+                !Gemini_IsFiltered($hash, $devName, $_, \%wlSet, \%extraActive, \@blacklist)
+            } sort keys %{$dev->{READINGS}};
+
+            my $truncated = scalar(@readings) > $maxReadings;
+            @readings = @readings[0..$maxReadings-1] if $truncated;
+
+            if (@readings) {
+                $context .= "  Readings:\n";
+                for my $reading (@readings) {
+                    my $val  = $dev->{READINGS}{$reading}{VAL}  // '';
+                    my $time = $dev->{READINGS}{$reading}{TIME} // '';
+                    $context .= "    $reading: $val (Stand: $time)\n";
+                }
+                $context .= "    ... (weitere Readings gefiltert)\n" if $truncated;
             }
         }
 
@@ -1216,8 +1749,12 @@ sub Gemini_ExecuteFunctionCall {
         my $device = $args->{device} // '';
 
         if (exists $main::defs{$device}) {
-            my $dev = $main::defs{$device};
-            my @blacklist = Gemini_GetBlacklist($hash);
+            my $dev         = $main::defs{$device};
+            my @blacklist   = Gemini_GetBlacklist($hash);
+            my @whitelist   = Gemini_GetEffectiveWhitelist($hash);
+            my %wlSet       = map { $_ => 1 } @whitelist;
+            my %extraActive = Gemini_ParseReadingFilterExtra($hash);
+
             my $stateResult  = "Geraet: $device\n";
             $stateResult .= "Typ: " . ($dev->{TYPE} // 'unbekannt') . "\n";
             $stateResult .= "Status: " . ReadingsVal($device, 'state', 'unbekannt') . "\n";
@@ -1225,7 +1762,7 @@ sub Gemini_ExecuteFunctionCall {
                 $stateResult .= "Readings:\n";
                 for my $reading (sort keys %{$dev->{READINGS}}) {
                     next if $reading eq 'state';
-                    next if Gemini_IsBlacklisted($reading, @blacklist);
+                    next if Gemini_IsFiltered($hash, $device, $reading, \%wlSet, \%extraActive, \@blacklist);
                     my $val = $dev->{READINGS}{$reading}{VAL} // '';
                     $stateResult .= "  $reading: $val\n";
                 }
@@ -1519,6 +2056,26 @@ sub Gemini_SendFunctionResult {
       lastTimeSync lastcmd Heap LoadAvg Uptime Wifi_*</code><br>
       Sobald das Attribut gesetzt wird, ersetzt die angegebene Liste die Standardliste vollstaendig.
       Beispiel: <code>attr GeminiAI readingBlacklist attrTemplate associate R-* Wifi_*</code></li>
+    <li><b>readingWhitelist</b> - Leerzeichen-/komma-getrennte Liste von Readings, die immer
+      an Gemini uebermittelt werden. Wenn nicht gesetzt, gilt eine sinnvolle Standard-Whitelist
+      (state, temperature, humidity, brightness, battery, ...).</li>
+    <li><b>readingFilterExtra</b> - Pro Geraet zusaetzlich aktivierte Readings im Format
+      <code>device1:reading1,reading2 device2:reading3</code>. Wird automatisch durch das
+      Reading-Filter Widget auf der Detailseite gepflegt.</li>
+    <li><b>maxReadingsPerDevice</b> - Maximale Anzahl an Readings pro Geraet, die in den
+      Kontext aufgenommen werden (Standard: 20).</li>
+  </ul><br>
+
+  <b>Reading-Filter Widget</b><br>
+  <ul>
+    Auf der Detailseite des Gemini-Devices erscheint ein interaktives Widget, mit dem fuer
+    jedes Geraet ausgewaehlt werden kann, welche Readings an die KI gesendet werden:<br>
+    &#128994; <b>Whitelist</b> &mdash; immer aktiv (aus <code>readingWhitelist</code> bzw. Default)<br>
+    &#128998; <b>Aktiviert</b> &mdash; zusaetzlich freigeschaltet (in <code>readingFilterExtra</code>)<br>
+    &#11036; <b>Deaktiviert</b> &mdash; nicht aktiv (kann per Klick aktiviert werden)<br>
+    &#128683; <b>Blacklist</b> &mdash; via <code>readingBlacklist</code> hart gefiltert<br>
+    Vor dem ersten Aufruf bzw. nach Aenderungen an <code>deviceList</code>/<code>controlList</code>
+    mit <code>set &lt;name&gt; collectReadings</code> die bekannten Readings einsammeln.
   </ul><br>
 
   <b>Set</b><br>
@@ -1542,6 +2099,13 @@ sub Gemini_SendFunctionResult {
       Beispiel: <code>set GeminiAI control Wenn die Tuer aufgeht, schalte das Licht ein</code>.
       Nur Geraete aus <b>controlList</b>/<b>controlRoom</b> duerfen gesteuert werden.</li>
     <li><b>resetChat</b> - Chat-Verlauf loeschen</li>
+    <li><b>collectReadings</b> - Bekannte Readings aller in <b>deviceList</b>/<b>controlList</b>
+      konfigurierten Geraete einsammeln (Voraussetzung fuer das Reading-Filter Widget).</li>
+    <li><b>readingFilterToggle</b> &lt;device&gt; &lt;reading&gt; enable|disable -
+      Reading global ein-/ausschalten (passt <code>readingBlacklist</code> an).</li>
+    <li><b>readingExtraToggle</b> &lt;device&gt; &lt;reading&gt; enable|disable -
+      Reading zusaetzlich aktivieren/deaktivieren (passt <code>readingFilterExtra</code> an).
+      Wird ueblicherweise vom Reading-Filter Widget aufgerufen.</li>
   </ul><br>
 
   <b>Get</b><br>
