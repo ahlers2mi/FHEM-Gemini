@@ -23,9 +23,12 @@ FHEM-Modul zur Anbindung der Google Gemini AI API. Ermöglicht Textanfragen, Bil
 - 💬 **Textfragen** – beliebige Fragen an Gemini stellen und die Antwort in FHEM-Readings speichern
 - 🖼️ **Bildanalyse** – Kamerabilder oder Snapshots direkt analysieren lassen (z. B. Türkamera, Überwachungskamera)
 - 🏠 **Gerätesteuerung** – Smart-Home-Geräte per natürlicher Sprache steuern (Function Calling, Whitelist-basiert)
+- ⏰ **Automatisierung** – zeitgesteuerte (`at`) und eventbasierte (`notify`) Geräte per Sprachbefehl anlegen lassen
 - 📋 **Geräte-Status** – Zusammenfassung aller oder ausgewählter Geräte inkl. Raumfilter
 - 🔄 **Multi-Turn Chat** – Kontext über mehrere Anfragen hinweg erhalten (optional deaktivierbar)
 - 📝 **Mehrere Ausgabeformate** – Antwort als Roh-Markdown, reiner Text und HTML verfügbar
+- 🎚️ **Reading-Filter Widget** – pro Gerät auf der Detailseite festlegen, welche Readings an die KI gehen
+- 💸 **Token-Optimierung** – kompaktes Kontextformat (Faktor ~3–5 weniger Tokens) und optionales `lazyCommands` für bedarfsgesteuerte Befehlslisten
 - 🛡️ **Sicherheit** – nur explizit freigegebene Geräte dürfen gesteuert werden; konfigurierbarer Readings-Filter
 
 ---
@@ -232,6 +235,52 @@ define GeminiResponseNotify notify GeminiAI:responsePlain {
 }
 ```
 
+### Automatisierungen per Sprachbefehl anlegen (AT/NOTIFY)
+
+Über `control` oder `chat` kann Gemini zeitgesteuerte (`at`) und eventbasierte (`notify`) Geräte selbstständig anlegen:
+
+```
+set GeminiAI chat Schalte das Licht morgen um 7 Uhr ein
+set GeminiAI chat In 30 Minuten soll die Heizung ausgehen
+set GeminiAI chat Jeden Tag um 22:00 alle Lampen ausschalten
+set GeminiAI chat Wenn die Haustür aufgeht, schalte das Licht ein
+set GeminiAI chat Überwache die Temperatur, wenn sie über 25 Grad geht, sende einen Alarm
+```
+
+Die angelegten Geräte werden dem Raum aus `automationRoom` zugeordnet (sonst dem Raum des Gemini-Devices). Das zuletzt angelegte Gerät steht im Reading `lastAutomation`. Einmalige NOTIFY-Devices werden nach dem Auslösen automatisch wieder entfernt.
+
+### Reading-Filter Widget
+
+Auf der Detailseite des Gemini-Devices erscheint ein interaktives Widget, mit dem pro Gerät festgelegt werden kann, welche Readings an die KI gesendet werden – das spart Tokens und vermeidet irrelevanten Kontext:
+
+- 🟢 **Whitelist** – immer aktiv (aus `readingWhitelist` bzw. Default)
+- 🟦 **Aktiviert** – zusätzlich freigeschaltet (in `readingFilterExtra`)
+- ⬜ **Deaktiviert** – nicht aktiv (kann per Klick aktiviert werden)
+- 🚫 **Blacklist** – via `readingBlacklist` hart gefiltert
+
+Vor dem ersten Aufruf bzw. nach Änderungen an `deviceList`/`controlList` die bekannten Readings einsammeln:
+
+```
+set GeminiAI collectReadings
+```
+
+Readings können auch direkt per Befehl umgeschaltet werden:
+
+```
+set GeminiAI readingFilterToggle <device> <reading> enable|disable
+set GeminiAI readingExtraToggle  <device> <reading> enable|disable
+```
+
+### Tokenverbrauch senken (lazyCommands)
+
+Standardmäßig werden die `set`-Befehle aller steuerbaren Geräte im Initial-Prompt mitgeschickt. Bei vielen Geräten mit langen Befehlslisten (HomeMatic, MAX, HUE) kostet das viele Tokens. Mit `lazyCommands` werden die Befehlslisten weggelassen; Gemini holt sie über ein zusätzliches Tool `get_device_commands` nur für die Geräte, die es konkret schalten will:
+
+```
+attr GeminiAI lazyCommands 1
+```
+
+Das spart Tokens, kostet aber einen zusätzlichen API-Roundtrip pro Gerät.
+
 ### Chat-Verlauf verwalten
 
 Chat zurücksetzen:
@@ -264,7 +313,12 @@ get GeminiAI chatHistory
 | `deviceRoom` | Komma-getrennte Raumliste; alle Geräte mit passendem `room`-Attribut werden für `askAboutDevices` verwendet | – |
 | `controlList` | Komma-getrennte Liste der Geräte, die Gemini steuern darf **(Pflicht für `control`/`chat` mit Steuerung)** | – |
 | `controlRoom` | Komma-getrennte Raumliste; alle Geräte mit passendem `room`-Attribut werden automatisch als steuerbar eingestuft und ergänzen `controlList`. Duplikate werden entfernt. | – |
+| `automationRoom` | Raum für automatisch angelegte AT/NOTIFY-Geräte. Wenn nicht gesetzt, wird der erste Raum des Gemini-Devices verwendet. | – |
+| `lazyCommands` | `0`/`1`: Bei `1` werden die `set`-Befehle der steuerbaren Geräte **nicht** im Initial-Prompt mitgeschickt; Gemini holt sie bedarfsweise über das Tool `get_device_commands`. Spart Tokens, kostet aber einen zusätzlichen API-Roundtrip pro Gerät. | `0` |
 | `readingBlacklist` | Leerzeichen-getrennte Liste von Reading- bzw. Befehlsnamen, die **nicht** an Gemini übermittelt werden. Wildcards mit `*` werden unterstützt (z. B. `R-*`, `Wifi_*`). Wenn nicht gesetzt, gilt die eingebaute Standardliste. | `attrTemplate associate R-* RegL_* associatedWith peerListRDate protLastRcv lastTimeSync lastcmd Heap LoadAvg Uptime Wifi_*` |
+| `readingWhitelist` | Leerzeichen-/komma-getrennte Liste von Readings, die immer an Gemini übermittelt werden. Wenn nicht gesetzt, gilt eine sinnvolle Standard-Whitelist (`state`, `temperature`, `humidity`, `brightness`, `battery`, …). | – |
+| `readingFilterExtra` | Pro Gerät zusätzlich aktivierte Readings im Format `device1:reading1,reading2 device2:reading3`. Wird i. d. R. automatisch über das Reading-Filter Widget gepflegt. | – |
+| `maxReadingsPerDevice` | Maximale Anzahl an Readings pro Gerät, die in den Kontext aufgenommen werden. | `20` |
 
 ---
 
@@ -280,6 +334,10 @@ get GeminiAI chatHistory
 | `chatHistory` | Anzahl der Nachrichten im Chat-Verlauf |
 | `lastCommand` | Letzter von Gemini ausgeführter `set`-Befehl (z. B. `Lampe1 on`) |
 | `lastCommandResult` | Ergebnis des letzten `set`-Befehls (`ok` oder Fehlermeldung) |
+| `lastAutomation` | Letztes automatisch angelegtes AT/NOTIFY-Gerät |
+| `promptTokenCount` | Anzahl der gesendeten Tokens (Frage/Input inkl. Kontext) |
+| `candidatesTokenCount` | Anzahl der vom Modell generierten Tokens (Antwort) |
+| `totalTokenCount` | Gesamtsumme der verbrauchten Tokens (Input + Output) |
 
 ---
 
@@ -371,6 +429,9 @@ attr global verbose 3
 
 | Version | Datum | Änderung |
 |---|---|---|
+| 4.2.0 | 2026-05-21 | Token-Optimierungen aus FHEM-OpenRouter portiert: kompaktes Pipe-Kontextformat (Faktor ~3–5 weniger Tokens); neues Attribut `lazyCommands` (bedarfsgesteuerte Befehlslisten via `get_device_commands`) |
+| 4.1.0 | 2026-05-21 | Neu: Reading-Filter Widget (Whitelist/Extra/Blacklist) mit Attributen `readingWhitelist`, `readingFilterExtra`, `maxReadingsPerDevice` und Set-Befehlen `collectReadings`, `readingFilterToggle`, `readingExtraToggle` |
+| 4.0.2 | 2026-04-27 | Optimierung des Prompt-Cachings |
 | 4.0.1 | 2026-04-21 | Neu: Attribut safetySettings zur Steuerung der Inhaltsfilterung (Vermeidung von False-Positives bei der Bildanalyse)
 | 4.0.0 | 2026-04-20 | Neu: AT/NOTIFY Support via Function Calling für zeitgesteuerte und eventbasierte Aktionen; Attribut automationRoom
 | 3.3.0 | 2026-04-15 | Metadatareadings candidatesTokenCount, promptTokenCount, totalTokenCount
