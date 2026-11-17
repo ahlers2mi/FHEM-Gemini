@@ -18,6 +18,11 @@
 #   maxHistory    - Maximale Anzahl Chat-Nachrichten (Standard: 20)
 #   systemPrompt  - Optionaler System-Prompt
 #   timeout       - HTTP Timeout in Sekunden (Standard: 30)
+#   retries       - Wiederholungen bei voruebergehenden Fehlern (HTTP-Fehler,
+#                   API 429/500/503/504) fuer ask/askWithImage/askAboutDevices (Standard: 2)
+#   retryDelay    - Sekunden bis zur ersten Wiederholung, danach steigend (Standard: 20)
+#   fallbackModel - Ersatzmodell, wenn das Modell nicht verfuegbar ist (404) oder
+#                   nach allen Wiederholungen weiter ueberlastet (optional)
 #   deviceList    - Komma-getrennte Liste der Geräte für askAboutDevices
 #   deviceRoom    - Komma-getrennte Raumliste; Geräte mit passendem room-Attribut
 #                   werden automatisch für askAboutDevices verwendet
@@ -66,6 +71,12 @@
 ##############################################################################
 
 # Versionshistorie:
+# 4.3.0 - 2026-11-17  Neu: Wiederholung bei voruebergehenden Fehlern (Attribute retries,
+#                          retryDelay) und Ersatzmodell (fallbackModel) fuer ask,
+#                          askWithImage, askAboutDevices; Reading lastModel.
+#                          Fix: maxHistory 0 schickte keine Nachricht (API 400
+#                          "contents is not specified") - es bleibt immer die
+#                          aktuelle Nachricht erhalten.
 # 4.2.0 - 2026-05-21  Neu: Token-Optimierungen aus FHEM-OpenRouter portiert -
 #                          kompaktes Pipe-Kontextformat in Gemini_BuildDeviceContext
 #                          und Gemini_BuildControlContext (Faktor ~3-5 weniger Tokens);
@@ -176,6 +187,9 @@ sub Gemini_Initialize {
         'maxReadingsPerDevice ' .
         'lazyCommands:0,1 ' .
         'timeout ' .
+        'retries ' .
+        'retryDelay ' .
+        'fallbackModel ' .
         'disable:0,1 ' .
         'disableHistory:0,1 ' .
         'deviceList:textField-long ' .
@@ -205,7 +219,7 @@ sub Gemini_Define {
     my $name = $args[0];
     $hash->{NAME}        = $name;
     $hash->{CHAT}        = [];   # Chat-Verlauf als Array-Referenz
-    $hash->{VERSION}     = '4.2.0';
+    $hash->{VERSION}     = '4.3.0';
 
     readingsSingleUpdate($hash, 'state',             'initialized', 1);
     readingsSingleUpdate($hash, 'response',          '-',           0);
@@ -223,6 +237,7 @@ sub Gemini_Define {
 
 sub Gemini_Undefine {
     my ($hash, $name) = @_;
+    RemoveInternalTimer($hash, 'Gemini_RetryTimer');
     return undef;
 }
 
@@ -230,6 +245,9 @@ sub Gemini_Attr {
     my ($cmd, $name, $attr, $value) = @_;
     if ($attr eq 'timeout') {
         return "timeout must be a positive number" unless ($value =~ /^\d+$/ && $value > 0);
+    }
+    if ($cmd eq 'set' && $attr =~ /^(?:retries|retryDelay)$/) {
+        return "$attr must be a number >= 0" unless ($value =~ /^\d+$/);
     }
     if ($attr eq 'maxReadingsPerDevice') {
         return "maxReadingsPerDevice must be a positive number"
@@ -370,6 +388,7 @@ sub Gemini_SendRequest {
     my $safetyLevel = AttrVal($name, 'safetySettings', 'BLOCK_ONLY_HIGH');
     my $timeout     = AttrVal($name, 'timeout',    30);
     my $maxHistory  = AttrVal($name, 'maxHistory', 20);
+    $maxHistory = 1 if ($maxHistory !~ /^\d+$/ || $maxHistory < 1);   # 4.3.0: aktuelle Nachricht nie verwerfen
 
     my @parts;
 
@@ -456,20 +475,79 @@ sub Gemini_SendRequest {
 
     Log3 $name, 4, "Gemini ($name): Anfrage " . $jsonBody;
 
-    my $url = "https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}";
+    # 4.3.0: Anfrage merken, damit sie bei voruebergehenden Fehlern wiederholt werden kann
+    RemoveInternalTimer($hash, 'Gemini_RetryTimer');
+    $hash->{helper}{req} = { body => $jsonBody, model => $model, try => 0, fallback => 0 };
+    Gemini_Post($hash);
 
-    readingsSingleUpdate($hash, 'state', 'requesting...', 1);
+    return undef;
+}
+
+##############################################################################
+# Gemini_Post (4.3.0)
+#   Gemerkte Anfrage ($hash->{helper}{req}) an das Modell schicken.
+##############################################################################
+sub Gemini_Post {
+    my ($hash) = @_;
+    my $name   = $hash->{NAME};
+    my $req    = $hash->{helper}{req} or return;
+    my $apiKey = AttrVal($name, 'apiKey', '');
+    my $model  = $req->{model};
+    my $url    = "https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}";
+
+    readingsSingleUpdate($hash, 'state', $req->{try} ? "requesting... (Versuch " . ($req->{try} + 1) . ")" : 'requesting...', 1);
 
     HttpUtils_NonblockingGet({
         url      => $url,
-        timeout  => $timeout,
+        timeout  => AttrVal($name, 'timeout', 30),
         method   => 'POST',
         header   => "Content-Type: application/json\r\nAccept: application/json",
-        data     => $jsonBody,
+        data     => $req->{body},
         hash     => $hash,
         callback => \&Gemini_HandleResponse,
     });
+    return undef;
+}
 
+##############################################################################
+# Gemini_Retry (4.3.0)
+#   Entscheidet bei einem Fehler, ob die Anfrage wiederholt wird.
+#   Voruebergehend (HTTP-Fehler, API 429/500/503/504): bis zu retries Mal,
+#   Abstand retryDelay * Versuch. Danach bzw. bei 404 (Modell nicht verfuegbar)
+#   einmal mit fallbackModel. Rueckgabe 1 = wird wiederholt (Chat nicht kuerzen).
+##############################################################################
+sub Gemini_Retry {
+    my ($hash, $code, $msg) = @_;
+    my $name = $hash->{NAME};
+    my $req  = $hash->{helper}{req} or return 0;
+    my $retries  = AttrVal($name, 'retries', 2);
+    my $delay    = AttrVal($name, 'retryDelay', 20);
+    my $fallback = AttrVal($name, 'fallbackModel', '');
+    my $transient = ($code =~ /^(?:HTTP|429|500|503|504)$/) ? 1 : 0;
+
+    if ($transient && $req->{try} < $retries) {
+        $req->{try}++;
+        my $wait = $delay * $req->{try};
+        readingsSingleUpdate($hash, 'state', "retry $req->{try}/$retries in ${wait}s", 1);
+        Log3 $name, 2, "Gemini ($name): $code - Wiederholung $req->{try}/$retries in ${wait}s";
+        InternalTimer(gettimeofday() + $wait, 'Gemini_RetryTimer', $hash, 0);
+        return 1;
+    }
+    if ($fallback ne '' && !$req->{fallback} && $req->{model} ne $fallback && ($transient || $code eq '404')) {
+        Log3 $name, 2, "Gemini ($name): $code bei $req->{model} - Ersatzmodell $fallback";
+        $req->{model}    = $fallback;
+        $req->{fallback} = 1;
+        $req->{try}      = $retries;   # mit dem Ersatzmodell nur ein Versuch
+        InternalTimer(gettimeofday() + 1, 'Gemini_RetryTimer', $hash, 0);
+        return 1;
+    }
+    return 0;
+}
+
+sub Gemini_RetryTimer {
+    my ($hash) = @_;
+    eval { Gemini_Post($hash) };
+    Log3 $hash->{NAME}, 1, "Gemini ($hash->{NAME}): Wiederholung fehlgeschlagen: $@" if ($@);
     return undef;
 }
 
@@ -483,6 +561,7 @@ sub Gemini_HandleResponse {
 
     if ($err) {
         readingsSingleUpdate($hash, 'lastError', "HTTP Fehler: $err", 1);
+        return if (Gemini_Retry($hash, 'HTTP', $err));   # 4.3.0
         readingsSingleUpdate($hash, 'state', 'error', 1);
         Log3 $name, 1, "Gemini ($name): HTTP Fehler: $err";
         pop @{$hash->{CHAT}};
@@ -506,6 +585,7 @@ sub Gemini_HandleResponse {
         my $errMsg  = $result->{error}{message} // 'Unbekannter API Fehler';
         my $errCode = $result->{error}{code}    // 'N/A';
         readingsSingleUpdate($hash, 'lastError', "API Fehler $errCode: $errMsg", 1);
+        return if (Gemini_Retry($hash, $errCode, $errMsg));   # 4.3.0
         readingsSingleUpdate($hash, 'state', 'error', 1);
         Log3 $name, 1, "Gemini ($name): API Fehler $errCode: $errMsg";
         pop @{$hash->{CHAT}};
@@ -553,6 +633,7 @@ sub Gemini_HandleResponse {
     readingsBulkUpdate($hash, 'responsePlain', $responsePlain);
     readingsBulkUpdate($hash, 'responseHTML',  $responseHTML);
     readingsBulkUpdate($hash, 'chatHistory', scalar(@{$hash->{CHAT}}));
+    readingsBulkUpdate($hash, 'lastModel',   $hash->{helper}{req}{model}) if ($hash->{helper}{req});   # 4.3.0
     readingsBulkUpdate($hash, 'state',       'ok');
     readingsBulkUpdate($hash, 'lastError',   '-');
     readingsEndUpdate($hash, 1);
@@ -1575,6 +1656,7 @@ sub Gemini_SendControl {
     my $model      = AttrVal($name, 'model',      'gemini-3.1-flash-lite-preview');
     my $timeout    = AttrVal($name, 'timeout',    30);
     my $maxHistory = AttrVal($name, 'maxHistory', 20);
+    $maxHistory = 1 if ($maxHistory !~ /^\d+$/ || $maxHistory < 1);   # 4.3.0
 
     $hash->{CONTROL_START_IDX}  = scalar(@{$hash->{CHAT}});
     $hash->{CHAT_EXTRA_CONTEXT} = $extraContext // '';
@@ -2120,6 +2202,14 @@ sub Gemini_SendFunctionResult {
     <li><b>maxHistory</b> - Max. Chat-Nachrichten (Standard: 20)</li>
     <li><b>systemPrompt</b> - Optionaler System-Prompt</li>
     <li><b>timeout</b> - HTTP Timeout in Sekunden (Standard: 30)</li>
+    <li><b>retries</b> - Wiederholungen bei voruebergehenden Fehlern (HTTP-Fehler, API 429/500/503/504)
+      fuer ask, askWithImage und askAboutDevices (Standard: 2). Waehrend des Wartens steht
+      state auf <code>retry n/N in Xs</code>.</li>
+    <li><b>retryDelay</b> - Sekunden bis zur ersten Wiederholung, jede weitere wartet entsprechend
+      laenger (Standard: 20).</li>
+    <li><b>fallbackModel</b> - Ersatzmodell (optional). Wird einmal verwendet, wenn das Modell nicht
+      verfuegbar ist (404) oder nach allen Wiederholungen weiter ueberlastet. Das tatsaechlich
+      verwendete Modell steht im Reading <code>lastModel</code>.</li>
     <li><b>disable</b> - Modul deaktivieren</li>
     <li><b>disableHistory</b> - Chat-Verlauf deaktivieren (0/1). Bei 1 wird jede Anfrage
       ohne vorherigen Chat-Verlauf gesendet und als eigenstaendiges Gespraech behandelt.
