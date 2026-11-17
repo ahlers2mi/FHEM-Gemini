@@ -303,10 +303,13 @@ get GeminiAI chatHistory
 |---|---|---|
 | `apiKey` | Google Gemini API Key **(Pflicht)** | – |
 | `model` | Gemini-Modell | `gemini-3.1-flash-lite-preview` |
-| `maxHistory` | Maximale Anzahl gespeicherter Chat-Nachrichten | `20` |
+| `maxHistory` | Maximale Anzahl gespeicherter Chat-Nachrichten (mindestens 1: die aktuelle Nachricht wird immer gesendet) | `20` |
 | `safetySettings` | Konfiguriert die Schwellenwerte für die Inhaltsfilterung der Google-API. Hilfreich, wenn harmlose Anfragen (z.B. Personen auf Kamerabildern) blockiert werden. (`BLOCK_NONE`, `BLOCK_ONLY_HIGH`, `BLOCK_MEDIUM_AND_ABOVE`) | `BLOCK_ONLY_HIGH` |
 | `systemPrompt` | Optionaler System-Prompt (Rolle/Verhalten von Gemini) | – |
 | `timeout` | HTTP-Timeout in Sekunden | `30` |
+| `retries` | Wiederholungen bei vorübergehenden Fehlern (HTTP-Fehler, API 429/500/503/504) für `ask`, `askWithImage`, `askAboutDevices`. `state` zeigt dabei `retry n/N in Xs`. | `2` |
+| `retryDelay` | Sekunden bis zur ersten Wiederholung, jede weitere wartet entsprechend länger | `20` |
+| `fallbackModel` | Ersatzmodell, einmal verwendet, wenn das Modell nicht verfügbar ist (404) oder nach allen Wiederholungen weiter überlastet. Das tatsächlich verwendete Modell steht im Reading `lastModel`. | – |
 | `disable` | Modul deaktivieren (`0`/`1`) | `0` |
 | `disableHistory` | Chat-Verlauf deaktivieren (`0`/`1`); jede Anfrage wird ohne vorherigen Verlauf an die API gesendet. Der interne Verlauf bleibt erhalten (für `resetChat`), wird aber nicht übertragen. | `0` |
 | `deviceList` | Komma-getrennte Geräteliste für `askAboutDevices`; `*` bezieht alle FHEM-Geräte ein | – |
